@@ -1,0 +1,46 @@
+# ===== 绿色迁移工具 v27 排除清单 =====
+# 说明：
+# 1. 以下为运行时动态目录、系统唯一性信息及工具自身工作目录，恢复时应排除
+# 2. /usr 目录在 v27 中统一按 /usr 恢复，不要把 /usr、/usr/local、/usr/bin、/usr/lib* 加入排除
+# 3. 定时任务相关目录（/etc/crontab、/etc/cron.*、/var/spool/cron*）不要加入排除
+
+# ===== 系统运行时关键路径：绝对排除 =====
+/dev
+/proc
+/sys
+/run
+/var/run
+/tmp
+/etc/mtab
+/etc/localtime
+/etc/localtime_bak
+/etc/local.conf
+
+# ===== 不建议通过迁移恢复的系统标识/网络信息 =====
+/etc/fstab
+/etc/hostname
+/etc/hosts
+/etc/resolv.conf
+/etc/machine-id
+/var/lib/dbus/machine-id
+/etc/ssh
+/etc/network
+/etc/netplan
+/etc/sysconfig/network
+/etc/sysconfig/network-scripts
+
+# ===== 引导与迁移工具自身目录：排除 =====
+/boot
+/opt/data/.xmig_stage
+/opt/data/.xmig_backup
+/opt/data/green_migration_relay
+
+# ===== 日志/缓存/临时文件 =====
+/var/log
+/opt/log
+/var/tmp
+*.log
+*.pid
+*.sock
+*.swp
+*.tmp
