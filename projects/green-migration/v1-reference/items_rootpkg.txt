@@ -1,0 +1,8 @@
+/opt
+/etc
+/var
+/bin
+/sbin
+/lib
+/lib64
+/usr
