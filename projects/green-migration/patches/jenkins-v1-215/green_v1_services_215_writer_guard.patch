@@ -1,0 +1,19 @@
+--- a/green_v1_services.sh
++++ b/green_v1_services.sh
+@@ -1,11 +1,12 @@
+ writer_check() {
+   local name bad=0
+   need pgrep
+-  for name in mysqld mariadbd beam.smp redis-server ssdb-server mongod postgres kingbase clickhouse-server; do
++  for name in mysqld mariadbd beam.smp redis-server ssdb-server mongod postgres kingbase clickhouse-server nats-server etcd; do
+     if pgrep -x "$name" >/dev/null 2>&1; then say "WRITER_RUNNING=$name"; bad=1; fi
+   done
+-  if pgrep -f '^/opt/xbrother/[^ ]+/bin/' >/dev/null 2>&1; then
+-    say 'PRODUCT_WRITER_RUNNING=/opt/xbrother/*/bin/*'; bad=1
+-  fi
++  # Monit/Gonit already gates managed process status in source_is_quiet.
++  # A command-path prefix alone does not prove a data writer. It also
++  # matches auxiliary programs such as xscript/checkmq/bin/xcheck_mq.
++  # Critical independently running DB/MQ processes are checked above.
+   return "$bad"
+ }
