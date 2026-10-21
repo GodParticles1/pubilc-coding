@@ -4,6 +4,7 @@
 
 ## Start here
 
+- [v1.1/](v1.1/README.md) is the bounded V1.1 release candidate for [Issue #4](https://github.com/GodParticles1/pubilc-coding/issues/4), built from the recovered complete #211+#215 development baseline. It includes offline tests, checksums and deployment/rollback instructions; Leader review and representative field acceptance remain required.
 - [v1-reference/](v1-reference/) contains **sanitized text representations** of the six-file user-provided legacy baseline (only four human-readable files are published).
 - The newly supplied original source v1 hash is verified (2026-10-10), and is the same as the previous upload. Original binary helpers are exactly the historical ARMv7 hard-float blobs, but **not published to this public repository**.
 - Go v2 lineage is `gmigrate 2.0.0-rebuild.2`, **not** the missing historic `2.0.0-dev.3`.

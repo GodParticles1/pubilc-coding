@@ -1,0 +1,93 @@
+{
+  "scope": "OFFLINE_EQUIVALENT_LOGIC_ONLY",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "tests_run": 150,
+  "passed": 146,
+  "failures": 0,
+  "errors": 0,
+  "skipped": [
+    {
+      "test": "test_offline_top_level_symlink_is_replaced_without_dereference (test_images.ImageTransactionTests.test_offline_top_level_symlink_is_replaced_without_dereference)",
+      "reason": "Windows host lacks real symlink creation privilege (WinError 1314); equivalent path/schema/tar rejection checks passed."
+    },
+    {
+      "test": "test_real_symlink_escape_is_not_followed (test_images.ImageTransactionTests.test_real_symlink_escape_is_not_followed)",
+      "reason": "Windows host lacks real symlink creation privilege (WinError 1314); equivalent path/schema/tar rejection checks passed."
+    },
+    {
+      "test": "test_restore_metadata_declared_kind_must_match_lstat (test_images.ImageTransactionTests.test_restore_metadata_declared_kind_must_match_lstat)",
+      "reason": "Windows host lacks real symlink creation privilege (WinError 1314); equivalent path/schema/tar rejection checks passed."
+    },
+    {
+      "test": "test_unpack_metadata_file_kind_cannot_disguise_actual_symlink (test_images.ImageTransactionTests.test_unpack_metadata_file_kind_cannot_disguise_actual_symlink)",
+      "reason": "Windows host lacks real symlink creation privilege (WinError 1314); equivalent path/schema/tar rejection checks passed."
+    }
+  ],
+  "source_sha256": {
+    "exclude.txt": "8b026e08d1afb4d3688c4eebac487d79a00075ee879385b94eb40e0ae8f544b3",
+    "green_migration_tool.sh": "deb11070c37b81b6acd0e2c9a9ff96e1692842363a593145265e228ae7240272",
+    "green_v11_image.py": "6e87745ef655fbef36ccf29f7ac63e58f37a0db09e78dbf629e66bb151471f2c",
+    "green_v11_jenkins.sh": "eb25f36ebf0d17c628bc7b4a67787e76d2998574a7865acf2d939200107aa15d",
+    "green_v1_services.sh": "13d431c04f0e7a03eddda4a7ff6746fcfef6de7f60de916cc2f8ec622faf2d3d",
+    "green_v1_target_start.sh": "2245a945415e19aa0a5f1a786adb59fdd2eaaeb5ed4867ef158a18c6d62da821",
+    "items_rootpkg.txt": "1a8479b7aa81e74783d7ebcea5de0d3fcb2c2dcf263208545926286de2c252b1",
+    "Jenkinsfile_green_migration_tool.groovy": "8f339f7d8e562a9ba9bf66b41df16fadb10e32d80c92fa521941838cc0950dc9",
+    "verify_offline.sh": "00451e024840f6230bdfa69ced341ae2e6ae0b8684a9140f7a1fe4602fc2a614",
+    "tests/run_matrix.py": "681cb718082f919e7ee21df420090eecc635e90ec9713a03a4d653bc32999cda",
+    "tests/run_suite.py": "aea0c2c46a5e32c685e66902326339d6e3e0e0047310d8f2fb7ab497eeaca8c3",
+    "tests/test_images.py": "97c28bb91aeb0dc7ee3f623700b0f2834947aa60dc68e5790741ffb2eaa3e13c",
+    "tests/test_integrated.py": "df8b26de5072f9f3676c4301c0385b3dfc7387c7a07287807a0f0dbde45f930b",
+    "tests/test_pipeline.py": "afdcf9de97af13a8dded818ee6e93907fef6c58cccbc136a3ac94d9d37e1a98c",
+    "tests/test_services.py": "e4a28573fb86181d93cb358ab5373db961e9252d9655e98d9630829eae9ec4c1",
+    "tests/test_transport.py": "1565ad8c489d50cc663002a66c5bc3ed3f60ab337981ddb92148a702f04b49c8"
+  },
+  "source_changed_during_run": [],
+  "field_armv7": "NOT_RUN",
+  "real_databases": "NOT_RUN",
+  "live_jenkins": "NOT_VERIFIED",
+  "business_acceptance": "PENDING",
+  "modules": [
+    {
+      "name": "test_images.py",
+      "exit_code": 0,
+      "tests_run": 70
+    },
+    {
+      "name": "test_integrated.py",
+      "exit_code": 0,
+      "tests_run": 3
+    },
+    {
+      "name": "test_pipeline.py",
+      "exit_code": 0,
+      "tests_run": 30
+    },
+    {
+      "name": "test_services.py",
+      "exit_code": 0,
+      "tests_run": 28
+    },
+    {
+      "name": "test_transport.py",
+      "exit_code": 0,
+      "tests_run": 19
+    }
+  ],
+  "matrix": "PASS_WITH_EXPLICIT_SKIPS",
+  "validation_date": "2026-10-22",
+  "timezone": "Asia/Shanghai",
+  "python": "3.12.4",
+  "checks": {
+    "bash_syntax": "PASS",
+    "python_compile": "PASS",
+    "shellcheck": "NOT_RUN_TOOL_UNAVAILABLE",
+    "groovy_syntax": "NOT_RUN_COMPILER_UNAVAILABLE",
+    "jenkins_declarative_runtime": "NOT_RUN"
+  },
+  "baseline_verification": {
+    "bash_syntax_files": 3,
+    "static_recovery": "PASS",
+    "historical_215_fixtures_passed": 10
+  },
+  "acceptance": "DRAFT_CANDIDATE_FOR_LEADER_REVIEW_ONLY"
+}
