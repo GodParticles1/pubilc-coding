@@ -8,13 +8,13 @@
 
 ## CURRENT
 
-- Branch feat/green-v1.1-issue4, base 746ebfaaa7d18106b7a824f303627bd897068ed1. No production host/job/service/image changes.
+- Draft PR: https://github.com/GodParticles1/pubilc-coding/pull/5 (open/draft, not merged). Branch feat/green-v1.1-issue4; base 746ebfaaa7d18106b7a824f303627bd897068ed1; tested candidate source commit 18e1b10e4b3bae6a38f21d93a8e01724660ab5ec. No production host/job/service/image changes.
 - RC1 final matrix PASS_WITH_EXPLICIT_SKIPS: 150 run / 146 passed / 4 Windows actual-symlink skips / 0 failures / 0 errors. Same 16 source/test digests across all components, unchanged during run. Final raw receipt: .local/rc1-complete.json; sanitized public receipt: projects/green-migration/v1.1/OFFLINE_TEST_REPORT.json. SHA256SUMS verifies 22 release files. Earlier integration-run receipts are not final evidence.
 
 ## NEXT
 
-- Publish the verified allowlisted candidate on this branch as one Draft PR. Runtime scripts are frozen; only publication handoff metadata may change.
-- Leader reviews offline scope and high-risk replacement before one representative same-architecture field qualification. Do not merge or self-ACCEPT.
+- Leader reviews Draft PR #5 and its exact source hashes/TEST_REPORT/COMPATIBILITY. Runtime scripts remain frozen. Review unavailable Groovy/Jenkins tooling, unsupported metadata and offline-rootfs gates before field qualification.
+- After Leader approval, perform one representative same-architecture source/target qualification with verified rollback, service/listener and business checks. Do not merge or self-ACCEPT from this Writer receipt.
 
 ## BLOCKERS / LIMITS
 
