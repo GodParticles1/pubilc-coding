@@ -4,7 +4,10 @@ on:
   push:
     branches: [feat/green-v1.1-issue4]
     paths:
-      - projects/green-migration/v1.1/**
+      - projects/green-migration/v1.1/**/*.sh
+      - projects/green-migration/v1.1/**/*.py
+      - projects/green-migration/v1.1/**/*.groovy
+      - projects/green-migration/v1.1/**/*.txt
       - .github/workflows/green-v11-offline.yml
 
 permissions:
@@ -20,6 +23,7 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - name: Native validation tools
+        timeout-minutes: 7
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends shellcheck groovy default-jre-headless rsync

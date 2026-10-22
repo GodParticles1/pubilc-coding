@@ -246,14 +246,32 @@ restore_args() {
   done
 }
 target_requested() {
-  printf '%s\n' "$GREEN_V11_SESSION" > "$GREEN_MIG_SCRATCH/target-operation-requested"
+  local request
+  request="$(mktemp "$GREEN_MIG_SCRATCH/.target-request.XXXXXXXX")"
+  # Keep this attempt in the requesting process. A response from an older
+  # concurrent invocation must never acknowledge a newer request's identity.
+  GREEN_V11_TARGET_ATTEMPT="$GREEN_V11_SESSION|${request##*/}"
+  printf '%s\n' "$GREEN_V11_TARGET_ATTEMPT" > "$request"
+  mv -T -- "$request" "$GREEN_MIG_SCRATCH/target-operation-requested"
 }
 target_acknowledged() {
-  printf '%s\n' "$GREEN_V11_SESSION" > "$GREEN_MIG_SCRATCH/target-operation-acknowledged"
+  [[ -n ${GREEN_V11_TARGET_ATTEMPT:-} ]] || die 'missing current target request identity'
+  local acknowledgement
+  acknowledgement="$(mktemp "$GREEN_MIG_SCRATCH/.target-ack.XXXXXXXX")"
+  printf '%s\n' "$GREEN_V11_TARGET_ATTEMPT" > "$acknowledgement"
+  mv -T -- "$acknowledgement" "$GREEN_MIG_SCRATCH/target-operation-acknowledged"
+}
+target_ack_matches() {
+  local requested="$GREEN_MIG_SCRATCH/target-operation-requested" acknowledged="$GREEN_MIG_SCRATCH/target-operation-acknowledged"
+  local request_session attempt
+  [[ -f $requested && ! -L $requested && -f $acknowledged && ! -L $acknowledged ]] || return 1
+  IFS='|' read -r request_session attempt < "$requested" || return 1
+  [[ $request_session == "$GREEN_V11_SESSION" && $attempt =~ ^\.target-request\.[A-Za-z0-9]+$ ]] || return 1
+  cmp -s -- "$requested" "$acknowledged"
 }
 compensate() {
   scratch_init
-  if [[ -f $GREEN_MIG_SCRATCH/target-operation-requested && ! -f $GREEN_MIG_SCRATCH/target-operation-acknowledged ]]; then
+  if [[ -e $GREEN_MIG_SCRATCH/target-operation-requested || -L $GREEN_MIG_SCRATCH/target-operation-requested ]] && ! target_ack_matches; then
     # SSH failure does not prove the remote process has exited, nor that its
     # rollback finished. Never launch a second target transaction on that guess.
     say "TARGET_OUTCOME=UNKNOWN; RECOVERY_TOKEN=$GREEN_V11_SESSION; inspect target owner/journal, then use exact-token recover-image only when safe; no automatic target retry" >&2

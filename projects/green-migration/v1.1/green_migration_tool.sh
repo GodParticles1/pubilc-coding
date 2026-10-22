@@ -76,17 +76,6 @@ DEFAULT_ITEMS=(/opt /etc /var /bin /sbin /lib /lib64 /usr)
 INCREMENTAL_EXTRA_DIRS=()
 OPT_INCREMENTAL_WHITELIST=()
 ETC_INCREMENTAL_WHITELIST=()
-OPT_INCREMENTAL_EXCLUDES=()
-
-FORCE_OVERWRITE_ITEMS=(
-  /etc/profile
-  /etc/crontab
-  /etc/xbrother_hardinfo
-  /etc/xbrother_product
-  /var/spool/cron/root
-  /var/spool/cron/crontabs/root
-)
-
 ITEMS_CSV=""
 ITEM_FILE=""
 
@@ -808,7 +797,8 @@ v11_backup_preflight(){
   if [[ -z "$IMAGE_OS_VERSION" ]]; then IMAGE_OS_VERSION="$(v11_os_value VERSION_ID)"; fi
   IMAGE_OS_ID="${IMAGE_OS_ID:-UNVERIFIED}"; IMAGE_OS_VERSION="${IMAGE_OS_VERSION:-UNVERIFIED}"
   relay_exec "$(v11_quote "${GREEN_V11_RELAY_PYTHON:-python3}" --version) >/dev/null && test -f '$V11_RELAY_SCRIPTS/green_v11_image.py'" || v11_fail 'relay Python3/image helper unavailable'
-  local fs_probe="probe=$(printf '%q' "$RELAY_ROOT"); while [ ! -e \"\$probe\" ]; do probe=\$(dirname \"\$probe\"); done; fs=\$(findmnt -T \"\$probe\" -n -o FSTYPE); [ -n \"\$fs\" ] && [ \"\$fs\" != fuse.rclone ]"
+  local fs_probe
+  fs_probe="probe=$(printf '%q' "$RELAY_ROOT"); while [ ! -e \"\$probe\" ]; do probe=\$(dirname \"\$probe\"); done; fs=\$(findmnt -T \"\$probe\" -n -o FSTYPE); [ -n \"\$fs\" ] && [ \"\$fs\" != fuse.rclone ]"
   relay_exec "$fs_probe" || v11_fail 'relay working image must use verified native storage, not mounted WebDAV'
   v11_archive_store_check
   local selected

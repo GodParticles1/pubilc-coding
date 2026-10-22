@@ -15,6 +15,10 @@ Install all of these together into the same **new versioned directory** on each 
 - green_v1_target_start.sh — safe token-based compatibility entry; no automatic start-all.
 - items_rootpkg.txt and exclude.txt — recovered historic defaults, **not current onsite facts**.
 
+The single RC2 runtime ZIP omits tests and verify_offline.sh. Its SHA256SUMS verifies packaged bytes; SOURCE_SHA256SUMS retains the full source/test manifest for the exact repository commit in PACKAGE.json. Reproduce tests from that checkout, then deploy only the runtime files above. Never copy the synthetic test drivers to a migration host.
+
+From the exact clean checkout, rebuild it with `python3 tests/package_release.py --output /private/green-v1.1-rc2.zip`. The builder verifies source hashes, refuses overwrite, fixes ZIP metadata and rechecks every packaged byte and CRC. Source and runtime manifests have separate scopes.
+
 Source, relay and target require Bash 4+, Python 3.8+, coreutils, OpenSSH and working native utilities. Source tar must support exclusions; rsync is optional unless explicitly selected. Relay local/WebDAV archive checks require findmnt; WebDAV must already be mounted at /opt/data/webdav/Base. No mount/credential setup is performed. Python is explicit because safe untrusted tar/metadata and transaction validation require it; a missing capability blocks before source stop.
 
 Numeric owners, modes, regular files, hardlinks and bounded symlinks are verified. This RC **blocks Linux ACL/xattr/capability attributes, missing inspection APIs or inspection errors** pending a verified metadata adapter. It checks source before transfer so a legacy tar/rsync cannot silently drop those attributes. It does not claim ACL/SELinux equivalence. Special files, noncanonical paths, unsupported symlink layouts and nested independent target mounts block. Review exclusions and topology for the actual image before field use.

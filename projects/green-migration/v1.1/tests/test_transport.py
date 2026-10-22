@@ -112,8 +112,14 @@ v11_backup_preflight''')
     def fake_transport(self):
         self.write("ssh", '''#!/usr/bin/env bash
 while (($#)); do
-  case "$1" in -o|-i|-p) shift 2;; -*) shift;; *@*) shift; break;; *) shift;; esac
+  case "$1" in
+    -o|-i|-p|-l|-F|-S|-J|-b) (($#>=2)) || exit 64; shift 2;;
+    --) shift; (($#)) || exit 64; shift; break;;
+    -*) shift;;
+    *) shift; break;;
+  esac
 done
+(($#)) || exit 64
 cmd="$*"
 # The fake endpoint alone selects the explicit test adapter. The production
 # release never consults TEST_FIXTURE_SHELL and never accepts fixture mode.
@@ -134,7 +140,14 @@ cp -a -- "$src" "$dst"
         self.write("findmnt", '#!/usr/bin/env bash\necho "$FAKE_RELAY_FSTYPE"\n')
         self.write("mountpoint", '#!/usr/bin/env bash\nexit 0\n')
 
-    def backup(self, mode="tar-stream", store="none", desired=None, exclude_text="*.log\n", extra_files=None, action="backup-to-relay", hardlink_copy=False, cross_item_link=False):
+    def test_fake_ssh_preserves_rsync_login_option_command(self):
+        self.fake_transport()
+        for connection in ("fixture@fixture-relay", "-l fixture -p 22 -o BatchMode=yes fixture-relay"):
+            r = self.bash("ssh " + connection + " printf '%s' command-preserved")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(r.stdout, "command-preserved")
+
+    def backup(self, mode="tar-stream", store="none", desired=None, exclude_text="*.log\n", extra_files=None, action="backup-to-relay", hardlink_copy=False, cross_item_link=False, fake_rsync=False):
         self.fake_transport()
         source = self.base / "source"
         (source / "opt/app").mkdir(parents=True)
@@ -155,6 +168,7 @@ cp -a -- "$src" "$dst"
         self.env.update(SOURCE_FIXTURE=shell_path(source), EXCLUDE=shell_path(exclude), RELAY=shell_path(relay),
                         STORE=shell_path(archives), STORE_MODE=store, COPY_MODE=mode, TEST_ACTION=action)
         self.env["TEST_ITEMS"] = "/opt/app,/opt/extra" if cross_item_link else "/opt/app"
+        self.env["TEST_USE_FAKE_RSYNC"] = "true" if fake_rsync else "false"
         self.env["GREEN_V11_RELAY_SCRIPT_DIR"] = shell_path(RELEASE)
         if desired is not None:
             profile = self.base / "desired-services.txt"
@@ -168,6 +182,12 @@ cp -a -- "$src" "$dst"
         # For the integrated fake-host test only, map its root filesystem to a
         # temporary directory. No such bypass flag exists in production code.
         r = self.bash('''source "$TOOL"
+if [[ $TEST_USE_FAKE_RSYNC == true ]]; then
+  # Production discovery intentionally prefers installed binaries. Only these
+  # two simulated-protocol cases replace discovery with their explicit fake.
+  eval "$(declare -f init_helper_bins | sed '1s/init_helper_bins/runtime_init_helper_bins/')"
+  init_helper_bins() { runtime_init_helper_bins; RSYNC_BIN="$TEST_BIN/rsync"; }
+fi
 [[ -z "$TEST_FIXED_TIMESTAMP" ]] || TIMESTAMP="$TEST_FIXED_TIMESTAMP"
 if [[ $TEST_SOURCE_CYCLE == true ]]; then
   eval "$(declare -f v11_validate | sed '1s/v11_validate/v11_original_validate/')"
@@ -253,7 +273,7 @@ exec /usr/bin/tar "$@"
 
     def test_rsync_code24_leaves_inprogress_and_no_success(self):
         self.write("rsync", '#!/usr/bin/env bash\nif [[ $1 == --version || $1 == --help ]]; then echo rsync; exit 0; fi\nexit 24\n')
-        r, relay = self.backup(mode="rsync")
+        r, relay = self.backup(mode="rsync", fake_rsync=True)
         self.assertEqual(r.returncode, 24, r.stdout + r.stderr)
         image = next((relay / "test").iterdir())
         self.assertTrue((image / ".inprogress").is_file())
@@ -270,7 +290,7 @@ mkdir -p "$dst"
 prefix="${src%%/./*}"; relative="${src#*/./}"
 (cd "$prefix" && /usr/bin/tar cpf - --exclude='*.log' "$relative") | /usr/bin/tar xpf - -C "$dst"
 ''')
-        r, relay = self.backup(mode="rsync")
+        r, relay = self.backup(mode="rsync", fake_rsync=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         image = next((relay / "test").iterdir())
         self.assertEqual((image / "files/opt/app/data").read_text(), "new database fixture")

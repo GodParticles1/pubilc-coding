@@ -248,6 +248,27 @@ elif kind == "ssh" and "-mindepth 2 -maxdepth 2" in sys.argv[-1]:
         self.assertEqual(count, len(self.records()))
         self.assertFalse(any(row["arguments"][0] == "source-resume-if-active" for row in self.operations()))
 
+    def test_successful_target_ack_cannot_confirm_a_later_lost_response(self):
+        changes = {
+            "ACTION": "restore-from-relay", "SOURCE_SERVICE_CYCLE": "false",
+            "BACKUP_ID": "fixture/20261022_120000", "TARGET_NODE_ID": "target-node",
+            "EXPECT_SOURCE_ID": "source-node",
+        }
+        first = self.command(changes=changes)
+        self.assertEqual(0, first.returncode, first.stdout + first.stderr)
+        scratch = self.base / "scratch"
+        old_ack = (scratch / "target-operation-acknowledged").read_bytes()
+        changes["FAKE_FAIL_OPERATION"] = "restore-from-relay"
+        second = self.command(changes=changes)
+        self.assertNotEqual(0, second.returncode)
+        self.assertIn("TARGET_OUTCOME=UNKNOWN; RECOVERY_TOKEN=", second.stderr)
+        self.assertNotEqual(old_ack, (scratch / "target-operation-requested").read_bytes())
+        count = len(self.records())
+        fallback = self.command("compensate", changes)
+        self.assertNotEqual(0, fallback.returncode)
+        self.assertIn("TARGET_OUTCOME=UNKNOWN; RECOVERY_TOKEN=", fallback.stderr)
+        self.assertEqual(count, len(self.records()))
+
     def test_cross_job_scratch_collision_is_not_silently_reused(self):
         first = self.command(changes={"SOURCE_SERVICE_CYCLE": "false"})
         self.assertEqual(0, first.returncode, first.stderr)
