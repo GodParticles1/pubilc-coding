@@ -1,33 +1,31 @@
-# RC2 validation pending; RC1 historical receipt below
+# RC2 offline verification receipt
 
-RC2 is being frozen for one Windows/Linux matrix. The RC1 results below do not certify changed RC2 bytes; the final RC2 receipt will replace this report after exact-source verification. Real Jenkins, deployment and field gates remain open.
+Date: 2026-10-22. Tested source commit: `39df25173ba6011268b376a855fbd7f39646b495`. Scope: isolated temporary data, fake service/network endpoints and real host filesystem/client primitives. No field or Leader acceptance is claimed.
 
-## Historical RC1 receipt
+**Linux: 174 run, 174 passed, zero skips/failures/errors. Windows: 174 run, 165 passed, 9 explicit skips, zero failures/errors.** All five components on both platforms reported the same 19 source/test digests, unchanged during each run and matching the delivered bytes. Exact receipt: OFFLINE_TEST_REPORT.json.
 
-2026-10-22, Windows / Git Bash / Python 3.12.4. Scope: equivalent logic and temporary data only.
+| Component | Linux run | Linux | Windows run | Windows |
+| --- | ---: | --- | ---: | --- |
+| test_images.py | 82 | PASS | 82 | 8 platform skips |
+| test_integrated.py | 3 | PASS | 3 | PASS |
+| test_pipeline.py | 35 | PASS | 35 | PASS |
+| test_services.py | 30 | PASS | 30 | PASS |
+| test_transport.py | 24 | PASS | 24 | 1 native-rsync skip |
 
-**150 tests: 146 passed, 4 skipped, 0 failures, 0 errors.** All five isolated module processes exited 0 and reported the same 16 source/test file digests; before/after hashes did not change during testing. OFFLINE_TEST_REPORT.json contains the exact identities.
+Linux evidence: [39808753397](https://github.com/GodParticles1/pubilc-coding/actions/runs/39808753397), job 119928957486, artifact 12438912243, archive SHA256 `2b8b6afd15cf3d3b6d7127ee09d0655515c3a4e61872be39cad314972343ab86`. Linux Bash syntax, Python compile, Shellcheck warning-level validation and real Groovy syntax compilation passed. Jenkins Declarative plugin/runtime was NOT_RUN. Windows lacked Shellcheck/Groovy tools; Linux supplies those checks against identical source bytes.
 
-| Component | Tests | Result |
-| --- | ---: | --- |
-| Image integrity/archive/transaction | 70 | 66 passed, 4 actual-symlink cases skipped |
-| Integrated source-copy-archive-target lifecycle and compensation | 3 | passed |
-| Jenkins parameter/role/credential/deployment/fallback | 30 | passed |
-| Shared service lifecycle and concurrency | 28 | passed |
-| Actual Shell transport with Fake SSH/SCP/rsync | 19 | passed |
+Reproduce from the exact source checkout:
 
-Reproduce from this directory:
+    bash verify_offline.sh --report /private/result.json
 
-    bash verify_offline.sh --report /absolute/private/path/result.json
+The integrated cases execute the actual Shell backup/copy/archive and restore entries with the shared controller. They cover source compensation on known transfer failure, archive restoration, target original-state return, completed-token reentry without further service operations, and startup-failure file/service rollback. Directory/direct-stage/relay tar and pre-mounted WebDAV semantics are also exercised in the transport component.
 
-Bash syntax and Python compilation: PASS. Embedded Jenkins Shell bodies: parsed in the suite. Shellcheck: NOT_RUN (tool unavailable). Groovy syntax compiler: NOT_RUN (compiler unavailable). Real Jenkins Declarative compilation/runtime: NOT_RUN. These are not relabeled as syntax or field PASS.
+Linux ran all four formerly skipped real-symlink cases plus actual 0700/0600 copy-window checks under umask 022, old-public-journal HOLD, O_NOFOLLOW leaf exchange and real SIGTERM/SIGKILL subprocess behavior. Native rsync 3.2.7 client/server used a Fake SSH endpoint with actual protocol bytes, anchored exclusions and within/across-item hardlinks. This does not prove a real SSH handshake or WebDAV server durability. Windows skipped those eight POSIX/symlink cases and native rsync; it exercised actual NTFS hardlinks and all remaining cases.
 
-The four skips are actual symlink creation/permission cases blocked by Windows privilege: image escape, top-level offline symlink, declared-kind versus actual symlink, and unpack metadata symlink. Pure path traversal, hostile metadata sentinel protection, schema/lstat validation, tar symlink-parent and hardlink attacks ran and passed; they do not replace Linux O_NOFOLLOW/durability acceptance. Real hardlinks were exercised locally.
+REVIEW_RESPONSE.md records the three P1 triggers and fixes. Further regressions cover changed supervisor membership, bounded hung Monit CLI, option/dot tokens, incomplete images, cold-state restarts, missing services/pidfile refusal, metadata attacks, snapshot/copy/start failure, exact-token rollback, preserved stale locks and lost/old SSH acknowledgements. The first Linux run (39804530983) was FAIL (168/171, three rsync fixture failures and Shellcheck warnings); it is superseded. An earlier Windows run was invalidated by cross-review source edits and is not final evidence. These failures are retained, not relabeled PASS.
 
-The integrated cases execute the actual Shell helper, copy lease and original-state restoration, actual tar/archives and the image transaction CLI with Fake Monit/SSH and synthetic target facts. The source root is mapped to a throwaway directory and the supplemental background sampling timer is modeled; independent concurrent cold readers and process restart failure gates have separate regression coverage. The native rsync algorithm/protocol, WebDAV server, actual Gonit/ARMv7 binaries and databases are not exercised.
+The later Linux tool-setup run 39807403158 timed out in apt-get update before tests and is classified INFRA_SETUP_FAILED / TESTS_NOT_RUN. The final workflow reuses existing tools, installs only missing dependencies and bounds package-network waits. It completed all checks against the final source above. Runtime ZIP construction was also checked at two output paths: identical bytes, 18 entries, all entry digests and CRC verified; test drivers are absent.
 
-Failing fixtures reproduced tar nonzero swallowed by a conditional-call function, metadata-before-validation writes outside an unpack root, root path rejection, and absolute tar exclusion mismatch. Independent review also identified reservation-collision overwrite risk; its exact existing-image preservation regression now passes. Partial recovery only requests missing original services; a healthy original set finalizes without new service actions. Read-only cold probes do not contend with mutation locks; active copy ownership blocks manual resume or target freeze.
+Source abort with unknown copy ownership and SIGKILL remain deliberate HOLD paths: retain the lease/locks/journal and reconcile ownership; never auto-clear or claim SOURCE_RECOVERED. Rootfs recovery requires a distinct offline mount/device, reviewed identity/profile and rollback contract. Linux ACL/xattr/capability restoration remains unsupported and fail-closed before source stop.
 
-Source/runtime/field boundaries remain explicit: current Jenkins INLINE configuration and deployed hashes, original customer image metadata, actual compatible target profile/mount, Linux ACL/xattr/capability adapter, ARMv7/database behavior, post-boot services and business acceptance are NOT_VERIFIED/NOT_RUN. Unsupported metadata is detected and blocked before copying/stopping. Full rootfs replacement is offline-only in this RC.
-
-This receipt supports Leader review of a Draft candidate. It is not production acceptance, a release authorization, a merged PR, or closure of #215/V1.
+Current Jenkins INLINE/configuration/deployed hashes, #215 recovery, real customer image metadata, ARMv7/ABI, real databases, actual target mount ownership/post-boot service and business acceptance remain NOT_VERIFIED/NOT_RUN/PENDING. A real Groovy compiler does not establish Jenkins behavior. Leader must review this Draft candidate before isolated same-architecture qualification; no merge or deployment occurred.
