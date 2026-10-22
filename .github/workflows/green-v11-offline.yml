@@ -25,9 +25,24 @@ jobs:
       - name: Native validation tools
         timeout-minutes: 7
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends shellcheck groovy default-jre-headless rsync
+          set -Eeuo pipefail
+          mkdir -p "$RUNNER_TEMP/green-evidence"
+          missing=()
+          command -v shellcheck >/dev/null || missing+=(shellcheck)
+          command -v groovyc >/dev/null || missing+=(groovy)
+          command -v java >/dev/null || missing+=(default-jre-headless)
+          command -v rsync >/dev/null || missing+=(rsync)
+          if ((${#missing[@]})); then
+            # Reuse the hosted image's package index first. Unrelated apt
+            # sources must not hold this isolated matrix indefinitely.
+            apt_options=(-o Acquire::Retries=0 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15)
+            if ! sudo timeout 120 apt-get "${apt_options[@]}" install -y --no-install-recommends "${missing[@]}"; then
+              sudo timeout 90 apt-get "${apt_options[@]}" update
+              sudo timeout 120 apt-get "${apt_options[@]}" install -y --no-install-recommends "${missing[@]}"
+            fi
+          fi
           echo "JAVA_HOME=$(dirname "$(dirname "$(readlink -f "$(command -v java)")")")" >> "$GITHUB_ENV"
+          { python3 --version; shellcheck --version; groovyc --version; rsync --version | head -n 1; } > "$RUNNER_TEMP/green-evidence/tools.txt"
       - name: Verify exact source and isolated migration matrix
         env:
           PYTHON: python3
