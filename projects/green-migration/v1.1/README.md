@@ -85,6 +85,8 @@ After Leader review, apply uses exactly those flags with operation apply. The st
 
 Hardlinks must form a closed set within the source manifest and the selected target allowlist after exclusions. A link into an excluded or unowned path blocks before target writes; closure is rechecked after cold-state capture, immediately before apply and during rollback. Independent offline recovery also rejects a mount sharing the running root's filesystem device: bind aliases and same-device subvolumes have no verified snapshot adapter in this RC. These checks do not establish that the mounted system is powered off; that remains an operator/field prerequisite.
 
+The running tool directory and selected service-helper directory must not overlap managed roots in either direction. This also protects custom installation paths: recovery may not replace its own controller or include one of its payload paths inside the controller directory. The check runs before state creation or freeze.
+
 Target startup defaults to the target's saved original service set. IMAGE_DESIRED_SERVICES=true explicitly selects the image's sealed desired-service contract, which is validated against target inventory; arbitrary missing service names block. On startup failure the same helper requiesces, restores the verified snapshot, resumes the original target state and verifies it. If any step is unsafe, active.json and all rollback files remain; no false success is emitted.
 
 ## Shell operation without Jenkins
@@ -156,6 +158,8 @@ Code rollback: stop scheduling new work; preserve the failed token/state and exa
 Data rollback: failure compensation is automatic when safe. Otherwise, after checking that no transfer or transaction still owns the target, run `bash green_migration_tool.sh recover-image --image-dir /private/verified-image "${target[@]}"` with the exact original contract. The image-dir is the original path and may be absent; recovery uses the retained sealed contract and verified snapshot. Do not unpack an archive or invent a new token to recover. Preserve the journal until Leader reviews successful recovery. Unknown or stale PID/lease/command-lock ownership needs explicit read-only process reconciliation; a dead PID alone never proves no orphan copy remains. SIGKILL cannot run compensation: its locks/journal deliberately remain and reentry blocks. No automatic stale-lock removal is provided.
 
 An SSH/Jenkins disconnect can lose the response while the target is still working or compensating. The adapter reports TARGET_OUTCOME=UNKNOWN and the recovery token, keeps failure status and issues no second target write. Inspect remote ownership, phase and service state before choosing any exact-token recovery. A returned wrapper success, completed file copy, or open port alone is not business acceptance.
+
+Target requests and acknowledgements carry the exact session and a fresh per-attempt identity. A previous acknowledgement or a late response cannot confirm a later rerun. The downstream completed-token check still provides idempotent reentry without repeating service actions.
 
 Required field gate after Leader review: one isolated representative same-architecture source and target; actual source/target/relay identities, current Jenkins INLINE mapping, exact deployed file hashes, actual writer/profile/exclusion/metadata capabilities, a complete real image and checksum, offline mount rollback, source original-state return, target boot/services/listeners and business acceptance. These remain NOT_VERIFIED/NOT_RUN. V1 remains OPEN.
 

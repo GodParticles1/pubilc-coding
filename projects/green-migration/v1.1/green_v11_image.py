@@ -893,6 +893,14 @@ def validate_args(args, data, recovery=False):
         for rel in roots:
             managed = root.joinpath(*rel.split("/"))
             require(external != managed and managed not in external.parents, "image/state inside managed target tree")
+    controls = [pathlib.Path(__file__).resolve().parent]
+    if args.services_helper:
+        controls.append(pathlib.Path(args.services_helper).resolve().parent)
+    for control in controls:
+        for rel in roots:
+            managed = root.joinpath(*rel.split("/"))
+            require(control != managed and managed not in control.parents and control not in managed.parents,
+                    "runtime/controller directory overlaps managed target tree; install the complete runtime outside restore scope")
     state = no_symlink_ancestors(args.state_dir, True)
     desired = {p: e for p, e in data["entries"].items()
                if any(contains(r, p) for r in roots) and not excluded(p, data["excludes"])}

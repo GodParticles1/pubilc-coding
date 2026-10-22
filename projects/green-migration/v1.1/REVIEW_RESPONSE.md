@@ -16,6 +16,8 @@ Further chain defects found while following those boundaries:
 - Resume checks unchanged supervisor membership before starts. A changed inventory returns HOLD before service requests.
 - Monit commands have bounded timeouts. CLI success still requires actual state/writer/listener checks.
 - SSH response loss records UNKNOWN and the recovery token; no automatic second target write. Key-only transport uses BatchMode=yes.
+- Acknowledgements match the current request attempt. First success followed by a disconnected rerun cannot inherit an old acknowledgement; a late old response cannot confirm a newer request.
+- Actual tool/helper directories cannot overlap managed roots in either direction, including custom deployments. Four counterexamples failed before the fix and passed after it; rejection precedes state creation/freeze.
 - Shell recover-image reuses the saved contract/snapshot and refuses archive re-extraction. SIGTERM/HUP can compensate; SIGKILL and uncertain source-copy ownership retain journals/locks for controlled reconciliation.
 - Offline validation rejects the running root and same-device bind/subvolume aliases. This technical gate cannot prove another machine/VM is powered off.
 

@@ -213,6 +213,23 @@ class ImageTransactionTests(unittest.TestCase):
         with self.assertRaisesRegex(gm.Blocked, "inside managed"):
             gm.validate_args(self.args("--state-dir", str(self.target / "opt/app/state")), gm.verify(self.image))
 
+    def test_owned_trees_cannot_overlap_runtime_or_service_controller_directories(self):
+        runtime = pathlib.Path(gm.__file__)
+        cases = (
+            ("helper-inside", runtime, self.target / "opt/app/controller.sh"),
+            ("helper-parent", runtime, self.target / "opt/controller.sh"),
+            ("runtime-inside", self.target / "opt/app/runtime/image.py", HERE / "green_v1_services.sh"),
+            ("runtime-parent", self.target / "opt/image.py", HERE / "green_v1_services.sh"),
+        )
+        for label, image_runtime, helper in cases:
+            with self.subTest(case=label), mock.patch.object(gm, "__file__", str(image_runtime)), \
+                 mock.patch.object(gm, "service") as service:
+                with self.assertRaisesRegex(gm.Blocked, "runtime/controller.*overlap"):
+                    gm.validate_args(self.args("--service-cycle", "--services-helper", str(helper)), gm.verify(self.image))
+                service.assert_not_called()
+                self.assertFalse((self.base / "state").exists())
+                self.assertEqual((self.target / "opt/app/data").read_text(), "old-data")
+
     def test_fixture_cannot_target_running_root(self):
         with self.assertRaises(gm.Blocked):
             gm.validate_args(self.args("--target-root", pathlib.Path(self.target.anchor).as_posix()), gm.verify(self.image))
