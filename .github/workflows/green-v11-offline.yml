@@ -1,0 +1,42 @@
+name: Green V1.1 isolated Linux verification
+
+on:
+  push:
+    branches: [feat/green-v1.1-issue4]
+    paths:
+      - projects/green-migration/v1.1/**
+      - .github/workflows/green-v11-offline.yml
+
+permissions:
+  contents: read
+
+jobs:
+  offline-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Native validation tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends shellcheck groovy default-jre-headless rsync
+          echo "JAVA_HOME=$(dirname "$(dirname "$(readlink -f "$(command -v java)")")")" >> "$GITHUB_ENV"
+      - name: Verify exact source and isolated migration matrix
+        env:
+          PYTHON: python3
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$RUNNER_TEMP/green-evidence"
+          git rev-parse HEAD | tee "$RUNNER_TEMP/green-evidence/commit.txt"
+          bash projects/green-migration/v1.1/verify_offline.sh --report "$RUNNER_TEMP/green-evidence/linux-matrix.json" 2>&1 | tee "$RUNNER_TEMP/green-evidence/verify.log"
+      - name: Preserve evidence only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: green-v11-offline-${{ github.sha }}
+          path: ${{ runner.temp }}/green-evidence/
+          if-no-files-found: error
+          retention-days: 14

@@ -1,4 +1,8 @@
-# RC1 offline verification receipt
+# RC2 validation pending; RC1 historical receipt below
+
+RC2 is being frozen for one Windows/Linux matrix. The RC1 results below do not certify changed RC2 bytes; the final RC2 receipt will replace this report after exact-source verification. Real Jenkins, deployment and field gates remain open.
+
+## Historical RC1 receipt
 
 2026-10-22, Windows / Git Bash / Python 3.12.4. Scope: equivalent logic and temporary data only.
 

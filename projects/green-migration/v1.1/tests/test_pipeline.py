@@ -160,6 +160,22 @@ elif kind == "ssh" and "-mindepth 2 -maxdepth 2" in sys.argv[-1]:
     def test_source_cannot_stop_relay(self):
         self.assert_refused({"SOURCE_IP": "relay.invalid"}, "source and relay must differ")
 
+    def test_production_adapter_rejects_fixture_before_transport(self):
+        # A directory marker must never select the isolated test backend through
+        # a production Job parameter, for either validation or actual execution.
+        for command in ("validate", "run"):
+            with self.subTest(command=command):
+                result = self.command(command, {"TARGET_MODE": "fixture"})
+                self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assertIn("invalid TARGET_MODE", result.stderr)
+                self.assertEqual([], self.records())
+
+    def test_path_component_tokens_are_rejected_before_scratch_or_transport(self):
+        for token in (".", "..", ".hidden", "-option"):
+            with self.subTest(token=token):
+                self.assert_refused({"SESSION_TOKEN": token}, "invalid SESSION_TOKEN")
+                self.assertFalse((self.base / "scratch").exists())
+
     def test_source_cycle_is_backup_only(self):
         self.assert_refused({"ACTION": "stage"}, "SOURCE_SERVICE_CYCLE requires")
 
@@ -215,6 +231,23 @@ elif kind == "ssh" and "-mindepth 2 -maxdepth 2" in sys.argv[-1]:
         self.assertIn("PREVIOUSLY_FAILED", second.stderr)
         self.assertEqual(1, len([r for r in self.operations() if r["arguments"][0] == "source-resume-if-active"]))
 
+    def test_lost_target_response_retains_unknown_outcome_without_retry(self):
+        changes = {
+            "ACTION": "restore-from-relay", "SOURCE_SERVICE_CYCLE": "false",
+            "BACKUP_ID": "fixture/20261022_120000", "TARGET_NODE_ID": "target-node",
+            "EXPECT_SOURCE_ID": "source-node", "FAKE_FAIL_OPERATION": "restore-from-relay",
+        }
+        result = self.command(changes=changes)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("TARGET_OUTCOME=UNKNOWN; RECOVERY_TOKEN=", result.stderr)
+        self.assertNotIn("TARGET_ROLLED_BACK=", result.stdout + result.stderr)
+        count = len(self.records())
+        fallback = self.command("compensate", changes)
+        self.assertNotEqual(0, fallback.returncode)
+        self.assertIn("no automatic target retry", fallback.stderr)
+        self.assertEqual(count, len(self.records()))
+        self.assertFalse(any(row["arguments"][0] == "source-resume-if-active" for row in self.operations()))
+
     def test_cross_job_scratch_collision_is_not_silently_reused(self):
         first = self.command(changes={"SOURCE_SERVICE_CYCLE": "false"})
         self.assertEqual(0, first.returncode, first.stderr)
@@ -246,6 +279,12 @@ elif kind == "ssh" and "-mindepth 2 -maxdepth 2" in sys.argv[-1]:
             self.assertFalse(any("StrictHostKeyChecking=no" in arg for arg in row["argv"]))
             self.assertFalse(any("/dev/null" in arg for arg in row["argv"]))
 
+    def test_key_authentication_never_prompts_for_password(self):
+        result = self.command(changes={"SOURCE_PASS": "", "RELAY_PASS": "", "TARGET_PASS": ""})
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertTrue(self.records())
+        self.assertTrue(all("BatchMode=yes" in row["argv"] for row in self.records()))
+
     def test_webdav_and_debug_map_to_tool_without_second_archive_implementation(self):
         result = self.command(changes={"IMAGE_STORE": "webdav", "DEBUG_LOGS": "true"})
         self.assertEqual(0, result.returncode, result.stderr)
@@ -268,13 +307,13 @@ elif kind == "ssh" and "-mindepth 2 -maxdepth 2" in sys.argv[-1]:
             "SOURCE_IP": "relay.invalid", "BACKUP_ID": "fixture/20261022_120000",
             "TARGET_NODE_ID": "target-node", "EXPECT_SOURCE_ID": "source-node",
             "RESTORE_MODE": "replace-managed", "RESTORE_ALLOWLIST": shell_path(allowlist),
-            "TARGET_SERVICE_CYCLE": "true", "TARGET_MODE": "fixture", "TARGET_ROOT": "/tmp/fixture-root",
+            "TARGET_SERVICE_CYCLE": "false", "TARGET_MODE": "offline", "TARGET_ROOT": "/mnt/recovery-root",
             "IMAGE_ARCH": "fixture-arch", "IMAGE_OS_ID": "fixture-os", "IMAGE_VERSION": "1",
         })
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         restore = next(row for row in self.operations() if row["arguments"][0] == "restore-from-relay")
         args = restore["arguments"]
-        expected = {"--restore-mode": "replace-managed", "--target-service-cycle": "true", "--target-mode": "fixture", "--source-id": "source-node", "--target-id": "target-node", "--image-arch": "fixture-arch"}
+        expected = {"--restore-mode": "replace-managed", "--target-service-cycle": "false", "--target-mode": "offline", "--source-id": "source-node", "--target-id": "target-node", "--image-arch": "fixture-arch"}
         for key, value in expected.items():
             self.assertEqual(value, args[args.index(key) + 1])
         self.assertTrue(args[args.index("--allowlist") + 1].endswith("/restore-allowlist.txt"))
@@ -313,6 +352,7 @@ elif kind == "ssh" and "-mindepth 2 -maxdepth 2" in sys.argv[-1]:
         self.assertEqual(0, result.returncode, result.stderr)
         restore = next(row for row in self.operations() if row["arguments"][0] == "precheck-restore")
         self.assertIn("--use-image-services", restore["arguments"])
+        self.assertFalse((self.base / "scratch" / "target-operation-requested").exists())
 
     def test_backup_source_metadata_and_explicit_desired_file_are_forwarded(self):
         desired = self.base / "desired-services.txt"

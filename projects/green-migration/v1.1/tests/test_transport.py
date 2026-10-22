@@ -23,7 +23,8 @@ class TransportTests(unittest.TestCase):
         self.bin = self.base / "bin"
         self.bin.mkdir()
         self.env = dict(os.environ, PYTHONUTF8="1", TOOL=shell_path(RELEASE / "green_migration_tool.sh"),
-                        TEST_BIN=shell_path(self.bin), TMPDIR=shell_path(self.base), TEST_FIXED_TIMESTAMP="", FAKE_SSH_TAR_FAIL="0", TEST_SOURCE_CYCLE="false", DESIRED_PROFILE="", FAKE_RELAY_FSTYPE="ext4")
+                        TEST_BIN=shell_path(self.bin), TMPDIR=shell_path(self.base), TEST_FIXED_TIMESTAMP="", FAKE_SSH_TAR_FAIL="0", TEST_SOURCE_CYCLE="false", DESIRED_PROFILE="", FAKE_RELAY_FSTYPE="ext4",
+                        TEST_FIXTURE_SHELL=shell_path(RELEASE / "tests/fixture_shell.sh"))
         self.write("python3", '#!/usr/bin/env bash\nexec python "$@"\n')
 
     def write(self, name, body):
@@ -39,6 +40,32 @@ class TransportTests(unittest.TestCase):
     def test_root_path_is_valid(self):
         r = self.bash('source "$TOOL"; v11_path /')
         self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_runtime_rejects_fixture_before_any_rpc(self):
+        r = self.bash('source "$TOOL"; TARGET_MODE=fixture; v11_validate')
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("fixture is test-only", r.stderr)
+
+    def test_shell_scratch_defaults_are_private(self):
+        r = self.bash('source "$TOOL"; printf "%s" "$(umask)"')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, "0077")
+
+    def test_shell_recovery_dispatch_uses_journal_and_never_unpacks(self):
+        allow = self.base / "allowlist"
+        allow.write_text("/opt/app\n")
+        self.env["ALLOW"] = shell_path(allow)
+        common = '''source "$TOOL"
+v11_python() { printf 'IMAGE_ENGINE_OP=%s\\n' "$1"; }
+main recover-image --image-dir "$TMPDIR/removed-original-image" --allowlist "$ALLOW" --session-token recovery-token --target-id target-fixture --source-id source-fixture --image-arch fixture-arch --image-os-id fixture-os --image-os-version 1 --image-product fixture-product --image-version 1'''
+        r = self.bash(common)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("IMAGE_ENGINE_OP=recover", r.stdout)
+        self.assertNotIn("IMAGE_ENGINE_OP=unpack", r.stdout)
+        r = self.bash(common + ' --image-archive "$TMPDIR/untrusted.tar"')
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("do not unpack an archive", r.stderr)
+        self.assertNotIn("IMAGE_ENGINE_OP=", r.stdout)
 
     def test_traversal_is_refused_before_rpc(self):
         r = self.bash('source "$TOOL"; v11_path /opt/../etc')
@@ -88,6 +115,9 @@ while (($#)); do
   case "$1" in -o|-i|-p) shift 2;; -*) shift;; *@*) shift; break;; *) shift;; esac
 done
 cmd="$*"
+# The fake endpoint alone selects the explicit test adapter. The production
+# release never consults TEST_FIXTURE_SHELL and never accepts fixture mode.
+if [[ "$cmd" == *'--target-mode fixture'* ]]; then cmd="${cmd//"$TOOL"/"$TEST_FIXTURE_SHELL"}"; fi
 if [[ "$cmd" == 'cat /etc/machine-id' ]]; then echo relay-fixture; exit 0; fi
 if [[ $FAKE_SSH_TAR_FAIL == 1 && "$cmd" == *'tar xpf'* ]]; then exit 255; fi
 if [[ -n $TEST_WEB_ROOT ]]; then cmd="$(printf '%s' "$cmd" | sed "s@/opt/data/webdav/Base@$TEST_WEB_ROOT@g")"; fi
@@ -104,12 +134,17 @@ cp -a -- "$src" "$dst"
         self.write("findmnt", '#!/usr/bin/env bash\necho "$FAKE_RELAY_FSTYPE"\n')
         self.write("mountpoint", '#!/usr/bin/env bash\nexit 0\n')
 
-    def backup(self, mode="tar-stream", store="none", desired=None, exclude_text="*.log\n", extra_files=None, action="backup-to-relay"):
+    def backup(self, mode="tar-stream", store="none", desired=None, exclude_text="*.log\n", extra_files=None, action="backup-to-relay", hardlink_copy=False, cross_item_link=False):
         self.fake_transport()
         source = self.base / "source"
         (source / "opt/app").mkdir(parents=True)
         (source / "opt/app/data").write_text("new database fixture", encoding="utf-8")
         (source / "opt/app/cache.log").write_text("excluded log", encoding="utf-8")
+        if hardlink_copy:
+            os.link(source / "opt/app/data", source / "opt/app/data-alias")
+        if cross_item_link:
+            (source / "opt/extra").mkdir()
+            os.link(source / "opt/app/data", source / "opt/extra/cross-item-alias")
         for name, value in (extra_files or {}).items():
             path = source / "opt/app" / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -119,6 +154,7 @@ cp -a -- "$src" "$dst"
         relay, archives = self.base / "relay", self.base / "archives"
         self.env.update(SOURCE_FIXTURE=shell_path(source), EXCLUDE=shell_path(exclude), RELAY=shell_path(relay),
                         STORE=shell_path(archives), STORE_MODE=store, COPY_MODE=mode, TEST_ACTION=action)
+        self.env["TEST_ITEMS"] = "/opt/app,/opt/extra" if cross_item_link else "/opt/app"
         self.env["GREEN_V11_RELAY_SCRIPT_DIR"] = shell_path(RELEASE)
         if desired is not None:
             profile = self.base / "desired-services.txt"
@@ -141,7 +177,7 @@ if [[ $TEST_SOURCE_CYCLE == true ]]; then
 fi
 profile_args=()
 [[ -z "$DESIRED_PROFILE" ]] || profile_args=(--desired-services "$DESIRED_PROFILE")
-common=(--source-root "$SOURCE_FIXTURE" --items /opt/app --exclude-file "$EXCLUDE" --source-id source-fixture --image-arch fixture-arch --image-os-id fixture-os --image-os-version 1 --image-product fixture-product --image-version 1 --mode "$COPY_MODE" --session-token transport-test)
+common=(--source-root "$SOURCE_FIXTURE" --items "$TEST_ITEMS" --exclude-file "$EXCLUDE" --source-id source-fixture --image-arch fixture-arch --image-os-id fixture-os --image-os-version 1 --image-product fixture-product --image-version 1 --mode "$COPY_MODE" --session-token transport-test)
 if [[ $TEST_ACTION == stage ]]; then
   main stage "${common[@]}" -b fixture-target -u fixture --remote-stage-root "$RELAY/direct-stage"
 else
@@ -150,6 +186,14 @@ fi''')
         return r, relay
 
     def test_tar_backup_is_complete_and_sealed(self):
+        self.env["TAR_FILELIST_RECEIPT"] = shell_path(self.base / "tar-filelist-path")
+        self.write("tar", '''#!/usr/bin/env bash
+argv=("$@")
+for ((i=0; i<$#; i++)); do
+  if [[ ${argv[i]} == -T ]]; then printf '%s\\n' "${argv[i+1]}" > "$TAR_FILELIST_RECEIPT"; fi
+done
+exec /usr/bin/tar "$@"
+''')
         r, relay = self.backup()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         image = next((relay / "test").iterdir())
@@ -158,6 +202,9 @@ fi''')
         self.assertFalse((image / "files/opt/app/cache.log").exists())
         self.assertIn("BACKUP_OK=", r.stdout)
         self.assertEqual(json.loads((image / "image-v11.json").read_text())["identity"]["source_id"], "source-fixture")
+        filelist = (self.base / "tar-filelist-path").read_text().strip()
+        self.assertIn(shell_path(self.base) + "/green-v11.", filelist)
+        self.assertTrue(filelist.endswith("/tar-items.txt"))
 
     def test_relay_working_image_on_webdav_is_refused_before_copy(self):
         self.env["FAKE_RELAY_FSTYPE"] = "fuse.rclone"
@@ -194,7 +241,7 @@ fi''')
         allow = self.base / "allowlist"
         allow.write_text("/opt/app\n")
         self.env.update(STAGE_ID=image.name, TARGET_FIXTURE=shell_path(target), ALLOW=shell_path(allow))
-        r = self.bash('bash "$TOOL" apply -b fixture-target -u fixture --remote-stage-root "$RELAY/direct-stage" --stage-id "$STAGE_ID" --restore-mode replace-managed --target-root "$TARGET_FIXTURE" --target-mode fixture --target-id target-fixture --source-id source-fixture --image-arch fixture-arch --image-os-id fixture-os --image-os-version 1 --image-product fixture-product --image-version 1 --allowlist "$ALLOW" --state-dir "$TMPDIR/transaction" --session-token direct-apply')
+        r = self.bash('bash "$TEST_FIXTURE_SHELL" apply -b fixture-target -u fixture --remote-stage-root "$RELAY/direct-stage" --stage-id "$STAGE_ID" --restore-mode replace-managed --target-root "$TARGET_FIXTURE" --target-mode fixture --target-id target-fixture --source-id source-fixture --image-arch fixture-arch --image-os-id fixture-os --image-os-version 1 --image-product fixture-product --image-version 1 --allowlist "$ALLOW" --state-dir "$TMPDIR/transaction" --session-token direct-apply')
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual((target / "opt/app/data").read_text(), "new database fixture")
         self.assertFalse((target / "opt/app/stale").exists())
@@ -220,13 +267,31 @@ if [[ $1 == --version || $1 == --help ]]; then echo rsync; exit 0; fi
 src="${@: -2:1}"; dst="${@: -1}"
 [[ "$dst" != *@*:* ]] || dst="${dst#*:}"
 mkdir -p "$dst"
-(cd "$(dirname "$src")" && /usr/bin/tar cpf - --exclude='*.log' "$(basename "$src")") | /usr/bin/tar xpf - -C "$dst"
+prefix="${src%%/./*}"; relative="${src#*/./}"
+(cd "$prefix" && /usr/bin/tar cpf - --exclude='*.log' "$relative") | /usr/bin/tar xpf - -C "$dst"
 ''')
         r, relay = self.backup(mode="rsync")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         image = next((relay / "test").iterdir())
         self.assertEqual((image / "files/opt/app/data").read_text(), "new database fixture")
         self.assertIn("mode=rsync", (image / "manifest.txt").read_text())
+
+    @unittest.skipUnless(shutil.which("rsync"), "native rsync unavailable; fake protocol is not native coverage")
+    def test_native_rsync_protocol_to_fake_ssh_endpoint(self):
+        # Real local rsync/client+server, and a fake SSH command executing only
+        # inside these throwaway roots. This is not real SSH/network evidence.
+        r, relay = self.backup(mode="rsync", hardlink_copy=True, cross_item_link=True,
+                               exclude_text="*.log\n/opt/app/private\n",
+                               extra_files={"private/secret": "must be excluded"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        image = next((relay / "test").iterdir())
+        self.assertEqual((image / "files/opt/app/data").read_text(), "new database fixture")
+        self.assertFalse((image / "files/opt/app/cache.log").exists())
+        self.assertFalse((image / "files/opt/app/private").exists())
+        self.assertTrue((image / "image-v11.sha256").is_file())
+        self.assertTrue(os.path.samefile(image / "files/opt/app/data", image / "files/opt/app/data-alias"))
+        self.assertTrue(os.path.samefile(image / "files/opt/app/data", image / "files/opt/extra/cross-item-alias"))
+        self.assertIn("BACKUP_OK=", r.stdout)
 
     def test_relay_restore_accepts_directory_then_legacy_named_tar_only(self):
         r, relay = self.backup(store="local")
@@ -246,7 +311,7 @@ mkdir -p "$dst"
             allow = self.base / ("allow-" + suffix)
             allow.write_text("/opt/app\n")
             self.env.update(TARGET_FIXTURE=shell_path(target), ALLOW=shell_path(allow), RUN_TOKEN="relay-" + suffix)
-            r = self.bash('bash "$TOOL" restore-from-relay --relay-ip fixture-relay --relay-user fixture --relay-root "$RELAY" --backup-id "$IMAGE_ID" --image-store local --image-archive-root "$STORE" --mode tar-stream --restore-mode replace-managed --target-root "$TARGET_FIXTURE" --target-mode fixture --target-id target-fixture --source-id source-fixture --image-arch fixture-arch --image-os-id fixture-os --image-os-version 1 --image-product fixture-product --image-version 1 --allowlist "$ALLOW" --state-dir "$TMPDIR/transaction-$RUN_TOKEN" --session-token "$RUN_TOKEN"')
+            r = self.bash('bash "$TEST_FIXTURE_SHELL" restore-from-relay --relay-ip fixture-relay --relay-user fixture --relay-root "$RELAY" --backup-id "$IMAGE_ID" --image-store local --image-archive-root "$STORE" --mode tar-stream --restore-mode replace-managed --target-root "$TARGET_FIXTURE" --target-mode fixture --target-id target-fixture --source-id source-fixture --image-arch fixture-arch --image-os-id fixture-os --image-os-version 1 --image-product fixture-product --image-version 1 --allowlist "$ALLOW" --state-dir "$TMPDIR/transaction-$RUN_TOKEN" --session-token "$RUN_TOKEN"')
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertEqual((target / "opt/app/data").read_text(), "new database fixture")
 

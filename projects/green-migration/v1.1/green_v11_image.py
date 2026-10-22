@@ -93,6 +93,34 @@ def write_json(path, obj):
     atomic_bytes(path, canonical(obj) + b"\n")
 
 
+def private_directory(path, exist_ok=False):
+    """Create private transaction storage; never repair an unknown old journal."""
+    path = no_symlink_ancestors(path, True)
+    if not path.parent.exists():
+        private_directory(path.parent)
+    try:
+        path.mkdir(mode=0o700)
+    except FileExistsError:
+        require(exist_ok, "private directory already exists: " + str(path))
+    st = path.lstat()
+    require(stat.S_ISDIR(st.st_mode), "private storage is not a real directory")
+    if os.name != "nt":
+        require(st.st_uid == os.geteuid() and stat.S_IMODE(st.st_mode) == 0o700,
+                "private storage requires current owner and mode 0700; preserve existing journal for reviewed reconciliation: " + str(path))
+    return path
+
+
+def copy_directory(path):
+    """Create missing payload ancestors privately without changing old modes."""
+    path = no_symlink_ancestors(path, True)
+    if path.exists():
+        require(path.is_dir(), "copy parent is not a directory")
+    else:
+        copy_directory(path.parent)
+        path.mkdir(mode=0o700)
+    return path
+
+
 def read_json(path):
     with open(path, encoding="utf-8") as src:
         return json.load(src)
@@ -211,7 +239,7 @@ def source_preflight(source_root, items_file, exclude_file):
     require(not any(a != b and contains(a, b) for a in roots for b in roots), "overlapping source items")
     patterns = read_excludes(exclude_file)
     require(not any(excluded(p, patterns) for p in roots), "protected/excluded source item")
-    checked = 0
+    checked, regular = 0, {}
 
     def visit(rel):
         nonlocal checked
@@ -225,6 +253,8 @@ def source_preflight(source_root, items_file, exclude_file):
                 "special source file requires reviewed adapter")
         assert_supported_metadata(path)
         checked += 1
+        if stat.S_ISREG(st.st_mode):
+            regular[rel] = st
         if stat.S_ISLNK(st.st_mode):
             safe_link(rel, os.readlink(path), roots)
         elif stat.S_ISDIR(st.st_mode):
@@ -236,14 +266,31 @@ def source_preflight(source_root, items_file, exclude_file):
         no_symlink_ancestors(path)
         require(os.path.lexists(path), "source item missing: " + rel)
         visit(rel)
+    assert_hardlink_closure(root, regular)
     return checked
 
 
-def inventory(root, roots, patterns=(), require_roots=False):
+def assert_hardlink_closure(root, regular):
+    """An inode's complete alias set must stay inside the declared walk scope."""
+    groups = {}
+    for rel, before in regular.items():
+        groups.setdefault((before.st_dev, before.st_ino), []).append((rel, before))
+    for paths in groups.values():
+        for rel, before in paths:
+            after = pathlib.Path(root).joinpath(*rel.split("/")).lstat()
+            require(stat.S_ISREG(after.st_mode) and
+                    (before.st_dev, before.st_ino, before.st_nlink) ==
+                    (after.st_dev, after.st_ino, after.st_nlink),
+                    "hardlink identity changed while checking boundary")
+            require(after.st_nlink == len(paths),
+                    "hardlink crosses managed/exclusion boundary: " + rel)
+
+
+def inventory(root, roots, patterns=(), require_roots=False, closed_hardlinks=False):
     """lstat-only walker: never visit symlink referents; record hardlink groups."""
     root = pathlib.Path(root)
     require(root.is_dir() and not root.is_symlink(), "missing/unsafe files root")
-    result, seen_inodes = {}, {}
+    result, seen_inodes, regular = {}, {}, {}
 
     def visit(rel):
         safe_relative(rel)
@@ -263,8 +310,9 @@ def inventory(root, roots, patterns=(), require_roots=False):
         elif stat.S_ISREG(st.st_mode):
             entry.update(kind="file", size=st.st_size, sha256=digest(path))
             after = path.lstat()
-            require((st.st_size, st.st_mtime_ns, st.st_ino) ==
-                    (after.st_size, after.st_mtime_ns, after.st_ino), "file changed while hashing")
+            require((st.st_size, st.st_mtime_ns, st.st_dev, st.st_ino, st.st_nlink) ==
+                    (after.st_size, after.st_mtime_ns, after.st_dev, after.st_ino, after.st_nlink), "file changed while hashing")
+            regular[rel] = st
             key = (st.st_dev, st.st_ino)
             if st.st_nlink > 1 and key in seen_inodes:
                 entry["hardlink_to"] = seen_inodes[key]
@@ -286,6 +334,8 @@ def inventory(root, roots, patterns=(), require_roots=False):
             require(not require_roots, "missing manifest-owned tree: " + rel)
             continue
         visit(rel)
+    if closed_hardlinks:
+        assert_hardlink_closure(root, regular)
     return result
 
 
@@ -310,6 +360,17 @@ def normalize_hardlinks(entries):
             if p != first:
                 result[p]["hardlink_to"] = first
     return result
+
+
+def assert_selected_hardlinks(all_entries, selected):
+    groups = {}
+    for rel, entry in all_entries.items():
+        if entry["kind"] == "file":
+            groups.setdefault(entry.get("hardlink_to", rel), set()).add(rel)
+    selected_paths = set(selected)
+    for paths in groups.values():
+        require(not (paths & selected_paths) or paths <= selected_paths,
+                "image hardlink crosses selected allowlist/exclusion boundary")
 
 
 def preserve_excluded_containers(root, roots, desired, current, patterns):
@@ -419,7 +480,7 @@ def content_comparable(entries):
 
 def verify_payload(image, data, check_metadata=True):
     roots = data["items"]
-    actual = inventory(image / "files", roots, require_roots=True)
+    actual = inventory(image / "files", roots, require_roots=True, closed_hardlinks=True)
     view = comparable if check_metadata else content_comparable
     require(view(actual) == view(data["entries"]), "image payload inventory/checksum mismatch")
     verify_owner_completeness(image, roots, data["excludes"], actual)
@@ -463,7 +524,7 @@ def seal(image, identity, exclude_file, desired_services=None):
     excludes = read_excludes(exclude_file)
     exclude_bytes = pathlib.Path(exclude_file).read_bytes()
     atomic_bytes(image / "exclude.txt", exclude_bytes)
-    entries = inventory(image / "files", roots, require_roots=True)
+    entries = inventory(image / "files", roots, require_roots=True, closed_hardlinks=True)
     verify_owner_completeness(image, roots, excludes, entries)
     # Reject unexpected top-level payloads, including accidental source mounts.
     all_entries = inventory(image / "files", sorted(os.listdir(image / "files")))
@@ -533,7 +594,7 @@ def unpack(archive, dest):
     archive, dest = pathlib.Path(archive), no_symlink_ancestors(dest, True)
     require(not os.path.lexists(dest), "unpack destination already exists")
     read_checksum(archive)
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     temp = pathlib.Path(tempfile.mkdtemp(prefix=".green-unpack-", dir=dest.parent))
     try:
         with tarfile.open(archive, "r:*") as tar:
@@ -563,11 +624,12 @@ def unpack(archive, dest):
             for name, m in sorted(by_name.items(), key=lambda pair: (len(pair[0].split("/")), pair[0])):
                 p = temp.joinpath(*name.split("/"))
                 no_symlink_ancestors(p)
-                p.parent.mkdir(parents=True, exist_ok=True)
+                p.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 if m.isdir():
-                    p.mkdir(exist_ok=True)
+                    p.mkdir(mode=0o700, exist_ok=True)
                 elif m.isfile():
-                    with tar.extractfile(m) as src, open(p, "xb") as dst:
+                    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    with tar.extractfile(m) as src, os.fdopen(fd, "wb") as dst:
                         shutil.copyfileobj(src, dst)
                 elif m.issym():
                     os.symlink(m.linkname, p)
@@ -575,7 +637,7 @@ def unpack(archive, dest):
             for name, m in by_name.items():
                 if m.islnk():
                     p = temp.joinpath(*name.split("/"))
-                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                     os.link(temp.joinpath(*m.linkname.split("/")), p)
             candidates = [p.parent for p in temp.rglob("manifest.txt") if (p.parent / META).is_file()]
             require(len(candidates) == 1, "archive must contain one sealed image")
@@ -698,9 +760,23 @@ def copy_entries(source, dest, entries, preserve_existing=False):
         if preserve_existing and existed:
             continue
         if entry["kind"] == "dir":
-            dst.mkdir(parents=True, exist_ok=True)
+            # Keep every newly created container private until ALL contents and
+            # their final metadata are installed. Source modes are not safe
+            # defaults for a temporarily incomplete tree.
+            copy_directory(dst)
+            if os.name != "nt":
+                fd = os.open(dst, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY)
+                try:
+                    # This exact owned directory has a verified rollback copy.
+                    # Defer granting its final owner/access until its entire
+                    # subtree is complete; an old 0755 parent must not expose
+                    # files destined for a 0700 image parent during replacement.
+                    os.fchmod(fd, 0o700)
+                    os.fchown(fd, os.geteuid(), os.getegid())
+                finally:
+                    os.close(fd)
         else:
-            dst.parent.mkdir(parents=True, exist_ok=True)
+            copy_directory(dst.parent)
             if entry.get("hardlink_to"):
                 target = dest.joinpath(*entry["hardlink_to"].split("/"))
                 require(target.is_file() and not target.is_symlink(), "hardlink referent not available")
@@ -708,7 +784,20 @@ def copy_entries(source, dest, entries, preserve_existing=False):
             elif entry["kind"] == "symlink":
                 os.symlink(entry["target"], dst)
             else:
-                shutil.copy2(src, dst, follow_symlinks=False)
+                flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                source_fd = os.open(src, flags)
+                try:
+                    require(stat.S_ISREG(os.fstat(source_fd).st_mode), "copy source is not a regular file")
+                    dest_fd = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                                      getattr(os, "O_NOFOLLOW", 0), 0o600)
+                    with os.fdopen(dest_fd, "wb") as output, os.fdopen(source_fd, "rb", closefd=False) as input_file:
+                        shutil.copyfileobj(input_file, output)
+                finally:
+                    os.close(source_fd)
+            # Restrictive source modes apply before the next entry is copied;
+            # otherwise a private file under a public target directory would
+            # remain readable until a final whole-batch chmod.
+            restore_metadata(dest, {rel: entry})
         written[rel] = entry
     restore_metadata(dest, written)
 
@@ -718,17 +807,14 @@ def linux_root_process():
 
 
 def target_profile(args):
+    require(args.target_mode in ("managed", "offline"), "unsupported production target mode")
     root = no_symlink_ancestors(args.target_root, True).resolve()
     require(root.is_dir(), "unsafe target root")
-    if args.target_mode == "fixture":
-        require(root != pathlib.Path(root.anchor), "fixture cannot target running root")
-        path = root / ".green-v11-fixture"
-    else:
-        path = pathlib.Path(args.target_profile) if args.target_profile else root / ".green-v11-target.json"
+    path = pathlib.Path(args.target_profile) if args.target_profile else root / ".green-v11-target.json"
     require(path.is_file() and not path.is_symlink(), "reviewed target profile missing")
     data = read_json(path)
     require(data.get("target_id") == args.target_id, "wrong target identity")
-    if args.target_mode != "fixture":
+    if args.target_mode in ("managed", "offline"):
         require(linux_root_process(), "root Linux recovery/target process required")
         require((root / "etc/machine-id").read_text().strip() == args.target_id, "target machine-id mismatch")
         require(platform.machine() == args.arch, "recovery/target architecture mismatch")
@@ -741,6 +827,8 @@ def target_profile(args):
                 "target root OS facts mismatch")
         if args.target_mode == "offline":
             require(root != pathlib.Path("/").resolve() and os.path.ismount(root), "offline recovery root must be an independent mount")
+            require(root.stat().st_dev != pathlib.Path("/").stat().st_dev,
+                    "offline recovery root shares running-root filesystem; verified independent storage required")
             require(not args.service_cycle, "offline root services must start after boot, not on recovery host")
         else:
             require(root == pathlib.Path("/").resolve(), "managed host root must be running /")
@@ -767,7 +855,8 @@ def nested_mounts(root, roots, mountinfo=None):
 
 
 def validate_args(args, data, recovery=False):
-    require(re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", args.token) is not None, "invalid transaction token")
+    require(re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}", args.token) is not None,
+            "invalid transaction token")
     require(1 <= args.service_timeout <= 3600, "invalid service timeout")
     require(args.source_id.lower() not in ("unknown", "unverified", "unavailable") and
             args.target_id.lower() not in ("unknown", "unverified", "unavailable"), "unknown source/target identity")
@@ -798,9 +887,8 @@ def validate_args(args, data, recovery=False):
         if args.target_mode == "managed":
             require(rel.startswith("opt/") and rel.count("/") >= 1, "live replacement is restricted to narrow /opt subtrees")
         if args.restore_mode == "replace-managed" and rel in BROAD:
-            require(args.target_mode in ("offline", "fixture"), "broad root image requires offline recovery mount")
-    if args.target_mode != "fixture":
-        require(not nested_mounts(root, roots), "nested/independent target mounts need a separate recovery contract")
+            require(args.target_mode == "offline", "broad root image requires offline recovery mount")
+    require(not nested_mounts(root, roots), "nested/independent target mounts need a separate recovery contract")
     for external in (pathlib.Path(args.image).resolve(), pathlib.Path(args.state_dir).resolve()):
         for rel in roots:
             managed = root.joinpath(*rel.split("/"))
@@ -808,7 +896,17 @@ def validate_args(args, data, recovery=False):
     state = no_symlink_ancestors(args.state_dir, True)
     desired = {p: e for p, e in data["entries"].items()
                if any(contains(r, p) for r in roots) and not excluded(p, data["excludes"])}
-    current = inventory(root, roots, data["excludes"])
+    assert_selected_hardlinks(data["entries"], desired)
+    current = inventory(root, roots, data["excludes"], closed_hardlinks=True)
+    if args.restore_mode == "merge-preserve":
+        groups = {}
+        for rel, entry in desired.items():
+            if entry["kind"] == "file":
+                groups.setdefault(entry.get("hardlink_to", rel), set()).add(rel)
+        for paths in groups.values():
+            existing = paths & set(current)
+            require(not existing or existing == paths,
+                    "merge-preserve cannot partly create an image hardlink group; review replacement scope")
     desired, protected = preserve_excluded_containers(root, roots, desired, current, data["excludes"])
     # Every ancestor used for a write must be a real directory. Reject
     # symlink/file collisions before stopping services or creating a snapshot.
@@ -846,7 +944,7 @@ def change_plan(desired, current, mode, patterns, protected):
 
 def service(args, op, desired=None):
     if not args.service_cycle:
-        require(args.target_mode in ("offline", "fixture"), "service lifecycle required for live target")
+        require(args.target_mode == "offline", "service lifecycle required for live target")
         return
     require(args.services_helper, "services helper required")
     command = ["bash", args.services_helper, op, args.token]
@@ -886,8 +984,7 @@ def reconcile(source, root, old, desired, mode):
 
 @contextlib.contextmanager
 def transaction_lock(state):
-    state = no_symlink_ancestors(state, True)
-    state.mkdir(parents=True, exist_ok=True)
+    state = private_directory(state, exist_ok=True)
     lock = state / ".lock"
     try:
         lock.mkdir(mode=0o700)
@@ -913,7 +1010,8 @@ def contract(args, data, roots):
 def apply_image(args, recover=False):
     state = pathlib.Path(args.state_dir)
     if recover:
-        require(re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", args.token) is not None, "invalid recovery token")
+        require(re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}", args.token) is not None,
+                "invalid recovery token")
         stored = no_symlink_ancestors(state / "sessions" / args.token / "image-contract.json", True)
         data = read_json(stored)
         active_record = read_json(no_symlink_ancestors(state / "active.json", True))
@@ -929,6 +1027,9 @@ def apply_image(args, recover=False):
         root_active = root / ".green-v11-restore" / "active.json"
         session = state / "sessions" / args.token
         record_file = session / "session.json"
+        if session.exists():
+            private_directory(state / "sessions", exist_ok=True)
+            private_directory(session, exist_ok=True)
         if record_file.exists() and not active.exists():
             record = read_json(record_file)
             require(record["contract"] == expected, "completed token belongs to another contract")
@@ -945,7 +1046,8 @@ def apply_image(args, recover=False):
         else:
             require(not root_active.exists(), "another state directory owns the target recovery token")
             require(not recover, "no active recovery transaction")
-            session.mkdir(parents=True, exist_ok=False)
+            private_directory(state / "sessions", exist_ok=True)
+            private_directory(session)
             write_json(session / "image-contract.json", data)
             record = {"contract": expected, "phase": "PREFLIGHT_OK", "changed": False,
                       "freeze_requested": False, "services_started": False}
@@ -964,10 +1066,11 @@ def apply_image(args, recover=False):
                 snap = session / "snapshot"
                 before = read_json(session / "snapshot.json")
                 require(digest(session / "snapshot.json") == record.get("snapshot_sha256"), "rollback snapshot inventory checksum mismatch")
-                require(comparable(inventory(snap, roots, data["excludes"])) == comparable(before), "rollback snapshot corrupted; recovery retained")
-                now = inventory(root, roots, data["excludes"])
+                private_directory(snap, exist_ok=True)
+                require(comparable(inventory(snap, roots, data["excludes"], closed_hardlinks=True)) == comparable(before), "rollback snapshot corrupted; recovery retained")
+                now = inventory(root, roots, data["excludes"], closed_hardlinks=True)
                 reconcile(snap, root, now, before, "replace-managed")
-                require(comparable(inventory(root, roots, data["excludes"])) == comparable(before), "rollback verification failed")
+                require(comparable(inventory(root, roots, data["excludes"], closed_hardlinks=True)) == comparable(before), "rollback verification failed")
                 sync_tree(root_for_sync(root, roots, session))
             if record["freeze_requested"]:
                 service(args, "target-resume")
@@ -976,6 +1079,7 @@ def apply_image(args, recover=False):
             active.unlink()
             root_active.unlink()
             fsync_dir(state)
+            fsync_dir(root_active.parent)
             print("TARGET_ROLLED_BACK=" + args.token)
 
         if recover:
@@ -984,9 +1088,9 @@ def apply_image(args, recover=False):
         save("PREFLIGHT_OK")
         try:
             stage = session / "stage"
-            stage.mkdir()
+            private_directory(stage)
             copy_entries(pathlib.Path(args.image) / "files", stage, desired)
-            require(comparable(inventory(stage, roots, data["excludes"], True)) == comparable(desired), "stage verification failed")
+            require(comparable(inventory(stage, roots, data["excludes"], True, closed_hardlinks=True)) == comparable(desired), "stage verification failed")
             sync_tree(stage)
             save("STAGED_VERIFIED")
             record["freeze_requested"] = args.service_cycle
@@ -995,7 +1099,7 @@ def apply_image(args, recover=False):
             service(args, "target-check")
             # Target may have legitimately written during preflight/staging.
             # Capture the exact quiescent preimage and final deletion preview.
-            current = inventory(root, roots, data["excludes"])
+            current = inventory(root, roots, data["excludes"], closed_hardlinks=True)
             desired, protected = preserve_excluded_containers(root, roots, desired, current, data["excludes"])
             final_plan = change_plan(desired, current, args.restore_mode, data["excludes"], protected)
             write_json(session / "plan.json", final_plan)
@@ -1003,18 +1107,22 @@ def apply_image(args, recover=False):
             if final_plan != plan:
                 print("FINAL_PLAN_UPDATED=" + args.token + "; SCOPE=AUTHORIZED_ALLOWLIST; INITIAL_AND_FINAL_RETAINED")
             snap = session / "snapshot"
-            snap.mkdir()
+            private_directory(snap)
             copy_entries(root, snap, current)
             write_json(session / "snapshot.json", current)
             record["snapshot_sha256"] = digest(session / "snapshot.json")
-            require(comparable(inventory(snap, roots, data["excludes"])) == comparable(current), "snapshot verification failed")
+            require(comparable(inventory(snap, roots, data["excludes"], closed_hardlinks=True)) == comparable(current), "snapshot verification failed")
             sync_tree(snap)
             save("SNAPSHOT_VERIFIED")
             service(args, "target-check")
+            # Recheck closure after snapshot and immediately before the first
+            # destructive operation. A concurrent out-of-scope alias blocks.
+            require(comparable(inventory(root, roots, data["excludes"], closed_hardlinks=True)) ==
+                    comparable(current), "target changed after cold snapshot")
             record["changed"] = True
             save("APPLYING")
             reconcile(stage, root, current, desired, args.restore_mode)
-            result = inventory(root, roots, data["excludes"])
+            result = inventory(root, roots, data["excludes"], closed_hardlinks=True)
             expected_after = desired if args.restore_mode == "replace-managed" else dict(desired, **current)
             require(comparable(result) == comparable(expected_after), "target data verification failed")
             sync_selected(root, roots)
@@ -1038,10 +1146,11 @@ def apply_image(args, recover=False):
             active.unlink()
             root_active.unlink()
             fsync_dir(state)
+            fsync_dir(root_active.parent)
             if args.service_cycle:
                 print("TARGET_SERVICES_READY=" + args.token)
             else:
-                print("TARGET_SERVICES_NOT_STARTED=OFFLINE_OR_FIXTURE_REQUIRES_SEPARATE_ACCEPTANCE")
+                print("TARGET_SERVICES_NOT_STARTED=OFFLINE_REQUIRES_SEPARATE_ACCEPTANCE")
             print("BUSINESS_ACCEPTANCE_PENDING")
         except BaseException:
             try:
@@ -1101,7 +1210,7 @@ def parser():
         for name in ("target-root", "state-dir", "token", "target-id", "source-id", "arch", "os-id", "os-version", "product", "version", "allowlist"):
             r.add_argument("--" + name, required=True)
         r.add_argument("--restore-mode", choices=("merge-preserve", "replace-managed"), default="merge-preserve")
-        r.add_argument("--target-mode", choices=("managed", "offline", "fixture"), default="managed")
+        r.add_argument("--target-mode", choices=("managed", "offline"), default="managed")
         r.add_argument("--target-profile")
         r.add_argument("--services-helper")
         r.add_argument("--service-cycle", action="store_true")
@@ -1111,6 +1220,14 @@ def parser():
 
 
 def main(argv=None):
+    previous_umask = os.umask(0o077)
+    try:
+        return command_main(argv)
+    finally:
+        os.umask(previous_umask)
+
+
+def command_main(argv=None):
     args = parser().parse_args(argv)
     try:
         if args.operation == "source-preflight":
@@ -1137,7 +1254,7 @@ def main(argv=None):
             old = {}
             def interrupted(signum, frame):
                 raise InterruptedError("restore interrupted by signal " + str(signum))
-            for sig in (signal.SIGINT, signal.SIGTERM):
+            for sig in (signal.SIGINT, signal.SIGTERM, *([signal.SIGHUP] if hasattr(signal, "SIGHUP") else [])):
                 old[sig] = signal.signal(sig, interrupted)
             try:
                 apply_image(args, recover=args.operation == "recover")

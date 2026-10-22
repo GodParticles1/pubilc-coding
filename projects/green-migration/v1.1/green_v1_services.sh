@@ -7,6 +7,7 @@ STATE_ROOT="${GREEN_V1_SERVICE_STATE:-/run/green-v1-services}"
 WAIT_STEP="${GREEN_V1_WAIT_STEP:-5}"
 STOP_WAIT="${GREEN_V1_STOP_WAIT:-90}"
 START_WAIT="${GREEN_V1_START_WAIT:-180}"
+MONIT_TIMEOUT="${GREEN_V1_MONIT_TIMEOUT:-15}"
 XR_PORTS="${GREEN_V1_XROCKET_PORTS:-7001 27001}"
 XR_WAIT="${GREEN_V1_XROCKET_WAIT:-60}"
 PRODUCT_CLI="${GREEN_V1_PRODUCT_CLI:-/opt/data/xrocket/xrocket.v2}"
@@ -25,9 +26,11 @@ host_identity() {
 }
 validate_token() { [[ ${1:-} =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$ ]] || fail 'invalid session token'; }
 validate_waits() {
-  [[ $WAIT_STEP =~ ^[1-9][0-9]*$ && $STOP_WAIT =~ ^[0-9]+$ && $START_WAIT =~ ^[0-9]+$ && $XR_WAIT =~ ^[0-9]+$ ]] || fail 'invalid lifecycle wait interval'
+  [[ $WAIT_STEP =~ ^[1-9][0-9]*$ && $STOP_WAIT =~ ^[0-9]+$ && $START_WAIT =~ ^[0-9]+$ && $XR_WAIT =~ ^[0-9]+$ ]] || { fail 'invalid lifecycle wait interval'; return; }
+  [[ $MONIT_TIMEOUT =~ ^[1-9][0-9]{0,2}$ ]] && ((MONIT_TIMEOUT<=300)) || fail 'invalid supervisor command timeout (1..300 seconds)'
 }
-require_monit() { need monit && monit summary >/dev/null || fail 'monit summary unavailable'; }
+monit_call() { timeout -k 2 "$MONIT_TIMEOUT" monit "$@"; }
+require_monit() { need monit && monit_call summary >/dev/null || fail 'monit summary unavailable'; }
 check_single_node() {
   [[ -r $MONITRC && -x $PRODUCT_CLI ]] || { fail 'missing single-node product/Monit installation'; return; }
   local n rc
@@ -114,7 +117,7 @@ monit_process_rows() {
     }' "${1:--}"
 }
 monit_snapshot() {
-  monit summary > "$1" || return 1
+  monit_call summary > "$1" || return 1
   monit_process_rows "$1" | awk -F '\t' '
     {if(seen[$1]++) bad=1; n++} END{exit (n==0 || bad)}'
 }
@@ -181,7 +184,7 @@ stop_inventory() {
   local all=$1 svc bad=0
   while IFS= read -r svc; do
     [[ -n $svc ]] || continue
-    monit stop "$svc" >/dev/null 2>&1 || { say "STOP_REQUEST_FAILED=$svc"; bad=1; }
+    monit_call stop "$svc" >/dev/null 2>&1 || { say "STOP_REQUEST_FAILED=$svc"; bad=1; }
   done < "$all"
   return "$bad"
 }
@@ -310,26 +313,27 @@ apply_desired() {
   local current="$1/resume-before.monit" running="$1/resume-running.txt"
   monit_snapshot "$current" || { fail 'cannot inventory services before resume'; return; }
   [[ -z $(list_unknown "$current") ]] || { say SERVICES_UNSETTLED_NO_START; return 4; }
+  [[ $(list_all "$current") == "$(cat "$dir/all.txt")" ]] || { say SERVICES_INVENTORY_CHANGED_NO_START; return 4; }
   list_running "$current" > "$running"
   # Persist every requested start before invoking a wrapper, including failures.
   # Recovery therefore also stops a wrapper which starts a child then returns nonzero.
   while IFS= read -r svc; do
     grep -Fxq -- "$svc" "$desired" && continue
     grep -Fxq -- "$svc" "$running" || continue
-    monit stop "$svc" >/dev/null 2>&1 || say "STOP_REQUEST_WARNING=$svc"
+    monit_call stop "$svc" >/dev/null 2>&1 || say "STOP_REQUEST_WARNING=$svc"
   done < "$dir/all.txt"
   for svc in tools_mariadb tools_redis tools_ssdb tools_rabbitmq tools_nats tools_nats_js tools_nginx xetcd; do
     if grep -Fxq -- "$svc" "$desired"; then
       grep -Fxq -- "$svc" "$running" && continue
       printf '%s\n' "$svc" >> "$dir/started.txt"
-      monit start "$svc" >/dev/null 2>&1 || say "START_REQUEST_WARNING=$svc"
+      monit_call start "$svc" >/dev/null 2>&1 || say "START_REQUEST_WARNING=$svc"
     fi
   done
   while IFS= read -r svc; do
     case "$svc" in tools_mariadb|tools_redis|tools_ssdb|tools_rabbitmq|tools_nats|tools_nats_js|tools_nginx|xetcd) continue;; esac
     grep -Fxq -- "$svc" "$running" && continue
     printf '%s\n' "$svc" >> "$dir/started.txt"
-    monit start "$svc" >/dev/null 2>&1 || say "START_REQUEST_WARNING=$svc"
+    monit_call start "$svc" >/dev/null 2>&1 || say "START_REQUEST_WARNING=$svc"
   done < "$desired"
   for ((elapsed=0; elapsed<=START_WAIT; elapsed+=WAIT_STEP)); do
     if state_matches "$desired" "$dir/all.txt" "$snap"; then
@@ -418,7 +422,7 @@ target_complete() {
 }
 target_check() {
   if [[ $# == 1 ]]; then check_session_cold target "$1"
-  else check_single_node && require_monit || return; say "TARGET_HOST=$(hostname_proc) READ_ONLY=YES"; monit summary; fi
+  else check_single_node && require_monit || return; say "TARGET_HOST=$(hostname_proc) READ_ONLY=YES"; monit_call summary; fi
 }
 target_start() {
   fail 'legacy unbounded target-start disabled; use target-freeze TOKEN --yes then target-resume TOKEN [--desired-file FILE]'
@@ -439,7 +443,7 @@ USAGE
 main() {
   local op=${1:-help}; (($#==0)) || shift
   case "$op" in help|-h|--help) usage; return;; esac
-  root_only && validate_waits && need pgrep && need awk || return
+  root_only && validate_waits && need pgrep && need awk && need timeout || return
   # Quiet probes are independent readers, using unique temporary snapshots.
   # The background copy watcher and foreground verification must not contend
   # for the mutator lock and invalidate a healthy image. They never start/stop

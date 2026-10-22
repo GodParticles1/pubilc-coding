@@ -23,7 +23,7 @@ session_token() {
     [[ $BUILD_NUMBER =~ ^[0-9]+$ ]] || die 'invalid BUILD_NUMBER';
     token="j-$(printf '%s' "${JOB_NAME:-green-migration-test}" | sha256sum | cut -c1-16)-$BUILD_NUMBER"
   fi
-  [[ $token =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || die 'invalid SESSION_TOKEN'
+  [[ $token =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$ ]] || die 'invalid SESSION_TOKEN'
   printf '%s' "$token"
 }
 scratch_init() {
@@ -63,7 +63,9 @@ validate() {
   [[ $TRANSFER_MODE == relay || $TRANSFER_MODE == direct ]] || die 'invalid TRANSFER_MODE'
   [[ $IMAGE_STORE == none || $IMAGE_STORE == local || $IMAGE_STORE == webdav ]] || die 'invalid IMAGE_STORE'
   [[ ${RESTORE_MODE:-merge-preserve} == merge-preserve || ${RESTORE_MODE:-merge-preserve} == replace-managed ]] || die 'invalid RESTORE_MODE'
-  [[ ${TARGET_MODE:-managed} == managed || ${TARGET_MODE:-managed} == offline || ${TARGET_MODE:-managed} == fixture ]] || die 'invalid TARGET_MODE'
+  # Synthetic filesystems are injected only by the isolated test driver. No Job
+  # parameter, marker or environment variable may bypass production preflight.
+  [[ ${TARGET_MODE:-managed} == managed || ${TARGET_MODE:-managed} == offline ]] || die 'invalid TARGET_MODE (managed|offline required)'
   for name in DEBUG_LOGS SOURCE_SERVICE_CYCLE TARGET_SERVICE_CYCLE IMAGE_DESIRED_SERVICES; do boolean "$name"; done
   for name in REMOTE_DIR_SOURCE REMOTE_DIR_TARGET REMOTE_DIR_RELAY RELAY_ROOT IMAGE_ARCHIVE_ROOT; do safe_path "${!name}"; done
   [[ $SOURCE_ROOT == / ]] || safe_path "$SOURCE_ROOT"
@@ -115,7 +117,8 @@ transport() {
   if [[ -n $password ]]; then
     SSHPASS="$password" timeout --signal=TERM --kill-after=15 "${SSH_COMMAND_TIMEOUT:-7200}" sshpass -e "$@"
   else
-    timeout --signal=TERM --kill-after=15 "${SSH_COMMAND_TIMEOUT:-7200}" "$@"
+    local program="$1"; shift
+    timeout --signal=TERM --kill-after=15 "${SSH_COMMAND_TIMEOUT:-7200}" "$program" -o BatchMode=yes "$@"
   fi
 }
 remote_script() {
@@ -242,8 +245,20 @@ restore_args() {
     [[ -z ${!name:-} ]] || target_options+=("$flag" "${!name}")
   done
 }
+target_requested() {
+  printf '%s\n' "$GREEN_V11_SESSION" > "$GREEN_MIG_SCRATCH/target-operation-requested"
+}
+target_acknowledged() {
+  printf '%s\n' "$GREEN_V11_SESSION" > "$GREEN_MIG_SCRATCH/target-operation-acknowledged"
+}
 compensate() {
   scratch_init
+  if [[ -f $GREEN_MIG_SCRATCH/target-operation-requested && ! -f $GREEN_MIG_SCRATCH/target-operation-acknowledged ]]; then
+    # SSH failure does not prove the remote process has exited, nor that its
+    # rollback finished. Never launch a second target transaction on that guess.
+    say "TARGET_OUTCOME=UNKNOWN; RECOVERY_TOKEN=$GREEN_V11_SESSION; inspect target owner/journal, then use exact-token recover-image only when safe; no automatic target retry" >&2
+    return 5
+  fi
   [[ -f $GREEN_MIG_SCRATCH/source-cycle-requested ]] || return 0
   if [[ -f $GREEN_MIG_SCRATCH/source-compensation-attempted ]]; then
     [[ ! -f $GREEN_MIG_SCRATCH/source-compensation-completed ]] || return 0
@@ -275,7 +290,9 @@ run() {
       deploy relay "$RELAY_IP" "$RELAY_USER" "${RELAY_PASS:-}" "$REMOTE_DIR_RELAY"
       deploy target "$TARGET_IP" "$TARGET_USER" "${TARGET_PASS:-}" "$REMOTE_DIR_TARGET"
       restore_args
+      [[ $ACTION != restore-from-relay ]] || target_requested
       remote_tool "$TARGET_IP" "$TARGET_USER" "${TARGET_PASS:-}" "$REMOTE_DIR_TARGET" "$ACTION" "${store_options[@]}" "${target_options[@]}" --relay-ip "$RELAY_IP" --relay-user "$RELAY_USER" --relay-root "$RELAY_ROOT" --backup-id "$BACKUP_ID" --exclude-file exclude.txt
+      [[ $ACTION != restore-from-relay ]] || target_acknowledged
       ;;
     list-relay-backups|list-archived-images)
       # The tool already lists native and archived images through this relay.
@@ -299,7 +316,9 @@ run() {
     apply)
       deploy target "$TARGET_IP" "$TARGET_USER" "${TARGET_PASS:-}" "$REMOTE_DIR_TARGET"
       restore_args
+      target_requested
       GREEN_MIG_B_PASS="${TARGET_PASS:-}" GREEN_MIG_KNOWN_HOSTS="$KNOWN_HOSTS_FILE" bash "$SCRIPT_DIR/green_migration_tool.sh" "$ACTION" "${tool_options[@]}" "${target_options[@]}" --stage-id "${TARGET_STAGE_ID:-$STAGE_ID}" -b "$TARGET_IP" -u "$TARGET_USER"
+      target_acknowledged
       ;;
     precheck)
       GREEN_MIG_B_PASS="${TARGET_PASS:-}" GREEN_MIG_KNOWN_HOSTS="$KNOWN_HOSTS_FILE" bash "$SCRIPT_DIR/green_migration_tool.sh" "$ACTION" "${tool_options[@]}" -b "$TARGET_IP" -u "$TARGET_USER"

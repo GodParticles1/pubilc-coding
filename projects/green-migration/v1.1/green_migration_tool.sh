@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-umask 022
+umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # V1.1 adds explicit safety contracts while retaining the existing transport flags.
@@ -197,12 +197,13 @@ cat <<EOF
      GREEN_MIG_RELAY_PASS    中转机密码
      GREEN_MIG_RABBIT_PASS   RabbitMQ 用户密码
 
-V1.1 安全入口：restore-image | plan-image | list-archived-images
+V1.1 安全入口：restore-image | plan-image | recover-image | list-archived-images
 恢复必选：--restore-mode merge-preserve|replace-managed --target-root ROOT
-          --target-mode managed|offline|fixture --allowlist FILE --session-token TOKEN
+          --target-mode managed|offline --allowlist FILE --session-token TOKEN
 源自动生命周期：--source-service-cycle true（仅 backup-to-relay、SOURCE_ROOT=/）
 目标自动生命周期：--target-service-cycle true（仅经审核的窄管理树）
 完整根镜像必须离线挂载；身份、版本、target profile 与完整参数见同目录 README.md。
+recover-image 使用原始 --image-dir 路径与精确 token/目标契约读取已保留日志，不重新展开归档。
 EOF
 }
 
@@ -556,7 +557,7 @@ backup_extra_incremental_tar(){
 
 precheck_action(){
   pre_basic_direct_checks
-  local items_file="/tmp/green_mig_items_precheck_$$.txt"
+  local items_file="$V11_SCRATCH/precheck-items.txt"
   resolve_items_to_file "$items_file"
   log_info "开始 precheck..."
   log_info "源根目录：$SOURCE_ROOT"
@@ -628,28 +629,30 @@ stop_source_cold_watch(){
 
 backup_to_relay_rsync(){
   local relay_dir="$1" items_file="$2"
-  local progress_opt rsync_opts p rp
-  local -a backup_items=()
+  local progress_opt p rc=0
+  local -a backup_items=() source_args=() rsync_opts=()
   progress_opt="$(detect_rsync_progress_opt)"
-  rsync_opts=(-aH --numeric-ids --links --partial --human-readable --exclude-from="$EXCLUDE_FILE" --log-file="$LOG_FILE")
+  rsync_opts=(-aH --relative --numeric-ids --links --partial --human-readable --exclude-from="$EXCLUDE_FILE" --log-file="$LOG_FILE")
   [[ -n "$progress_opt" ]] && rsync_opts+=("$progress_opt")
   [[ -n "$LIMIT" ]] && rsync_opts+=(--bwlimit="$LIMIT")
   mapfile -t backup_items < "$items_file"
   for p in "${backup_items[@]}"; do
     [[ -e "${SOURCE_ROOT%/}${p}" || -L "${SOURCE_ROOT%/}${p}" ]] || continue
-    rp="${p#/}"
-    relay_exec "mkdir -p '$relay_dir/files/$(dirname "$rp")'" >/dev/null 2>&1 || true
-    local rc=0
-    "$RSYNC_BIN" "${rsync_opts[@]}" --rsync-path="$(relay_rsync_path)" -e "$(rsync_ssh_cmd "$RELAY_PASS")" "${SOURCE_ROOT%/}${p}" "$RELAY_USER@$RELAY_IP:$relay_dir/files/$(dirname "$rp")/" || rc=$?
-    if (( rc != 0 )); then
-      if (( rc == 24 )); then
-        log_error "RSYNC_CODE_24: source files vanished while copying $p; partial backup stays .inprogress"
-        log_error "Check whether applications wrote/deleted files during transfer; never accept this image as complete"
-      fi
-      return "$rc"
-    fi
-    assert_source_cold_watch || return $?
+    # The /./ cut point keeps /opt/... rooted in the image, so root-anchored
+    # exclusions work. A single -H transfer retains links across item roots.
+    source_args+=("${SOURCE_ROOT%/}/.${p}")
   done
+  ((${#source_args[@]})) || { log_error 'all rsync source items vanished'; return 24; }
+  relay_exec "umask 077; mkdir -p '$relay_dir/files'" >/dev/null || return $?
+  "$RSYNC_BIN" "${rsync_opts[@]}" --rsync-path="$(relay_rsync_path)" -e "$(rsync_ssh_cmd "$RELAY_PASS")" "${source_args[@]}" "$RELAY_USER@$RELAY_IP:$relay_dir/files/" || rc=$?
+  if (( rc != 0 )); then
+    if (( rc == 24 )); then
+      log_error "RSYNC_CODE_24: source files vanished while copying; partial backup stays .inprogress"
+      log_error "Check whether applications wrote/deleted files during transfer; never accept this image as complete"
+    fi
+    return "$rc"
+  fi
+  assert_source_cold_watch || return $?
   backup_extra_incremental_rsync "$relay_dir"
 }
 
@@ -661,8 +664,8 @@ backup_to_relay_tar(){
   [[ "$tar_mode" == "none" ]] && { log_error "源端 tar 不支持排除清单"; return 2; }
   # Tar receives ./opt/... members. Preserve root-anchored exclude semantics.
   awk 'NF && $0 !~ /^[[:space:]]*#/ {if (substr($0,1,1)=="/") print "." $0; else print}' "$EXCLUDE_FILE" > "$effective_excludes" || return $?
-  relay_exec "mkdir -p '$relay_dir/files'" >/dev/null
-  listfile="/tmp/green_mig_relay_tar_items_$$.txt"; : > "$listfile"
+  relay_exec "umask 077; mkdir -p '$relay_dir/files'" >/dev/null || return $?
+  listfile="$V11_SCRATCH/tar-items.txt"; : > "$listfile"
   mapfile -t backup_items < "$items_file"
   for p in "${backup_items[@]}"; do
     [[ -e "${SOURCE_ROOT%/}${p}" || -L "${SOURCE_ROOT%/}${p}" ]] && echo ".${p}" >> "$listfile"
@@ -751,7 +754,8 @@ v11_validate(){
   [[ "$SOURCE_SERVICE_CYCLE" != true || ( "$ACTION" == backup-to-relay && "$SOURCE_ROOT" == / ) ]] || v11_fail 'source lifecycle is backup-to-relay root-image only'
   [[ "$RESTORE_MODE" == merge-preserve || "$RESTORE_MODE" == replace-managed ]] || v11_fail 'invalid restore mode'
   [[ "$MODE" == auto || "$MODE" == rsync || "$MODE" == tar-stream ]] || v11_fail 'invalid transfer mode'
-  [[ "$TARGET_MODE" == managed || "$TARGET_MODE" == offline || "$TARGET_MODE" == fixture ]] || v11_fail 'invalid target mode'
+  [[ "$TARGET_MODE" != fixture ]] || v11_fail 'fixture is test-only and unavailable from the runtime Shell entry'
+  [[ "$TARGET_MODE" == managed || "$TARGET_MODE" == offline ]] || v11_fail 'invalid target mode'
   [[ "$IMAGE_STORE" == none || "$IMAGE_STORE" == local || "$IMAGE_STORE" == webdav ]] || v11_fail 'invalid IMAGE_STORE'
   if [[ -z "$IMAGE_ARCHIVE_ROOT" ]]; then
     if [[ "$IMAGE_STORE" == webdav ]]; then IMAGE_ARCHIVE_ROOT=/opt/data/webdav/Base/auguImages
@@ -765,7 +769,7 @@ v11_validate(){
   [[ -z "$BACKUP_NAME" || "$BACKUP_NAME" =~ ^[A-Za-z0-9_-]{1,80}$ ]] || v11_fail 'unsafe backup name'
   [[ -z "$BACKUP_ID" || "$BACKUP_ID" =~ ^[A-Za-z0-9_-]+/[0-9]{8}_[0-9]{6}$ ]] || v11_fail 'unsafe backup ID'
   if [[ -z "$SESSION_TOKEN" ]]; then SESSION_TOKEN="local-${TIMESTAMP}-$$"; fi
-  [[ "$SESSION_TOKEN" =~ ^[A-Za-z0-9_.-]{1,64}$ && "$SESSION_TOKEN" != . && "$SESSION_TOKEN" != .. ]] || v11_fail 'invalid session token'
+  [[ "$SESSION_TOKEN" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$ ]] || v11_fail 'invalid session token'
   V11_RELAY_SCRIPTS="${GREEN_V11_RELAY_SCRIPT_DIR:-$SCRIPT_DIR}"
   v11_path "$V11_RELAY_SCRIPTS"
   for value in "$IMAGE_SOURCE_ID" "$TARGET_ID" "$IMAGE_ARCH" "$IMAGE_OS_ID" "$IMAGE_OS_VERSION" "$IMAGE_PRODUCT" "$IMAGE_VERSION"; do
@@ -781,7 +785,7 @@ v11_archive_store_check(){
     relay_exec "mountpoint -q /opt/data/webdav/Base && test -d '$root'" || v11_fail 'WebDAV is not mounted'
   else
     [[ "$root" != /opt/data/webdav/* ]] || v11_fail 'local store must not use WebDAV path'
-    relay_exec "mkdir -p '$root' && test \"\$(findmnt -T '$root' -n -o FSTYPE)\" != fuse.rclone" || v11_fail 'local archive requires native storage'
+    relay_exec "umask 077; mkdir -p '$root' && test \"\$(findmnt -T '$root' -n -o FSTYPE)\" != fuse.rclone" || v11_fail 'local archive requires native storage'
   fi
 }
 v11_backup_preflight(){
@@ -829,14 +833,17 @@ v11_seal_remote(){
   local -a desired=()
   if [[ -n "$DESIRED_SERVICES" ]]; then
     [[ -f "$DESIRED_SERVICES" && ! -L "$DESIRED_SERVICES" ]] || v11_fail 'missing desired service profile'
-    local profile="$V11_RELAY_SCRIPTS/.desired-$SESSION_TOKEN.txt"
-    relay_exec "test ! -e '$profile' && test ! -L '$profile'" || v11_fail 'desired profile collision'
+    local profile_dir profile
+    profile_dir="$(relay_exec "umask 077; mktemp -d '$V11_RELAY_SCRIPTS/.desired-$SESSION_TOKEN.XXXXXXXX'")" || return $?
+    [[ "$profile_dir" == "$V11_RELAY_SCRIPTS/.desired-$SESSION_TOKEN."* ]] || v11_fail 'invalid desired profile scratch directory'
+    v11_path "$profile_dir"
+    profile="$profile_dir/services.txt"
     scp_cmd "$RELAY_PASS" "$DESIRED_SERVICES" "$RELAY_USER@$RELAY_IP:$profile"
     desired=(--desired-services "$profile")
   fi
   v11_relay_image seal "$image" --source-id "$IMAGE_SOURCE_ID" --arch "$IMAGE_ARCH" --os-id "$IMAGE_OS_ID" --os-version "$IMAGE_OS_VERSION" --product "$IMAGE_PRODUCT" --version "$IMAGE_VERSION" --exclude-file "$image/exclude.txt" "${desired[@]}"
   v11_relay_image verify "$image"
-  if [[ -n "$DESIRED_SERVICES" ]]; then relay_exec "rm -f '$profile'"; fi
+  if [[ -n "$DESIRED_SERVICES" ]]; then relay_exec "rm -f '$profile' && rmdir '$profile_dir'"; fi
 }
 v11_archive_remote(){
   local image="$1" id="$2"
@@ -917,6 +924,7 @@ v11_restore_args(){
 v11_restore_local(){
   local op="$1" image="$IMAGE_DIR"
   v11_restore_args
+  [[ "$op" != recover || -z "$IMAGE_ARCHIVE" ]] || v11_fail 'recovery uses the retained journal; do not unpack an archive'
   if [[ -n "$IMAGE_ARCHIVE" ]]; then
     [[ -z "$image" ]] || v11_fail 'choose directory OR tar image'
     image="$V11_SCRATCH/unpacked"
@@ -1012,6 +1020,7 @@ main(){
     restore-from-relay) restore_from_relay_action ;;
     restore-image) v11_restore_local apply ;;
     plan-image) v11_restore_local plan ;;
+    recover-image) v11_restore_local recover ;;
     setup-ssh-key-auth) setup_ssh_key_auth_action ;;
     *) v11_fail "unsupported action: $ACTION" ;;
   esac

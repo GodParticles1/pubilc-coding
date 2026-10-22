@@ -1,4 +1,4 @@
-# Green Migration V1.1 RC1
+# Green Migration V1.1 RC2
 
 **Candidate for Issue #4 and Leader review. No production deployment, merge, current Jenkins configuration equivalence, ARMv7/database qualification or business acceptance is claimed.**
 
@@ -21,13 +21,13 @@ Numeric owners, modes, regular files, hardlinks and bounded symlinks are verifie
 
 ## Offline verification
 
-From this directory:
+From the source checkout (verification files are not installed on migration hosts):
 
     bash verify_offline.sh --report /absolute/private/path/offline-result.json
 
 The runner selects an existing Python 3 interpreter, checks every Shell script, compiles Python, runs available shellcheck/Groovy syntax tooling and the complete deterministic suite. Missing tools are explicitly NOT_RUN. The suite uses temporary roots, Fake Monit/Gonit, Fake SSH/SCP, simulated rsync outcomes and mounted-WebDAV semantics. Tar/archive bytes, hardlinks, hashing, local filesystem transactions and service controller code are exercised. Test fixtures never require root services or a production connection.
 
-On Windows the runtime uses the existing Git Bash/Python. Tests temporarily map paths/process identity; they do not relax production root checks. Real symlink creation can be skipped for missing Windows privilege; corresponding untrusted path/metadata/tar rejection remains tested. See TEST_REPORT.md and OFFLINE_TEST_REPORT.json for exact results and limits.
+The production Shell, Jenkins adapter and image CLI accept only managed/offline targets. Synthetic host checks live exclusively in tests/fixture_driver.py and tests/fixture_shell.sh; no marker or environment variable can enable them in runtime entry points. Do not install tests on source, relay or target. Windows uses existing Git Bash/Python and reports unsupported POSIX cases as SKIP. The isolated Linux workflow runs actual permissions, links, O_NOFOLLOW, signals and native rsync protocol against temporary data with fake service/network endpoints. See TEST_REPORT.md and OFFLINE_TEST_REPORT.json for exact results and limits.
 
 ## Source backup
 
@@ -45,6 +45,8 @@ The helper also supports an explicit validated minimal profile:
 
 That keeps the full original state and token and reports SOURCE_RECOVERED_PROFILE. It is not full SOURCE_RECOVERED. Automatic post-compensation does not silently expand that profile.
 
+GREEN_V1_MONIT_TIMEOUT bounds each supervisor command (default 15 seconds, accepted 1..300); stop/start polling deadlines remain separate. Inventory changes between freeze and resume cause HOLD before any new start. Ordinary transfer failures can compensate while the exact copy owner is known; uncertain signal/disconnect ownership retains the lease and is not automatic SOURCE_RECOVERED.
+
 ## Images and archives
 
 The historic manifest.txt and owners.tsv remain. V1.1 adds exclude.txt, image-v11.json and image-v11.sha256: canonical metadata plus the complete payload names, hashes, type, mode, numeric owner and link relationships. Owner names from the source must cover all nonexcluded payload paths. Nothing evaluates metadata as Shell.
@@ -61,7 +63,7 @@ A reviewed allowlist is mandatory. Each path must be owned by the sealed manifes
 - replace-managed overwrites same-name files and removes old-only entries **only within the allowlist**. It stages/verifies source, freezes target, snapshots/verifies the cold preimage, records the final change/deletion preview, applies/verifies data, rechecks cold state, and starts only the chosen target service set.
 - Broad /opt, /etc, /var, /usr, /bin, /sbin, /lib or /lib64 restore requires a real independent offline/recovery mount with TARGET_ROOT other than the running /. A narrow live managed target is limited to real /opt subtrees and requires TARGET_SERVICE_CYCLE=true. This RC has no equivalent live-root snapshot adapter; a running full-root replacement blocks.
 - Offline mode never controls services on the recovery host. It reports TARGET_APPLIED and TARGET_SERVICES_NOT_STARTED. Boot and service/business checks are a separate field gate.
-- fixture mode requires a non-root directory containing a synthetic .green-v11-fixture JSON. It is solely for equivalent logic tests.
+- Production entries reject fixture mode, including a non-root directory containing a synthetic marker.
 
 Actual target facts are compared with expected source/image facts. For managed/offline targets install an operator-reviewed JSON at TARGET_ROOT/.green-v11-target.json (or use image.py --target-profile). Its keys are target_id, arch, os_id, os_version, product and version. The engine also reads actual machine-id, os-release, architecture and mount state. Product/version must be established from the real installation by the operator; this RC does not infer them from product names. Same-node destructive replacement is rejected.
 
@@ -75,9 +77,46 @@ Use the direct image CLI for a read-only plan:
       --restore-mode replace-managed --allowlist /private/allowlist.txt \
       --state-dir /private/native/recovery-state --token UNIQUE_TOKEN
 
-After Leader review, apply uses exactly those flags with operation apply. The state/image must lie outside managed target trees, with enough native space for staging and rollback. Inspect initial-plan.json, final plan.json and snapshot.json. Changing state-dir cannot bypass the per-target lock/token.
+After Leader review, apply uses exactly those flags with operation apply. The state/image must lie outside managed target trees, with enough native space for staging and rollback. Inspect initial-plan.json, final plan.json and snapshot.json. Changing state-dir cannot bypass the per-target lock/token. RC2 requires private 0700 state, session, stage and snapshot directories owned by the invoking user. A public RC1 state directory blocks; preserve it and reconcile any active transaction with its matching release. Do not chmod or clear an unresolved journal to force entry. New files start at 0600 and new containers at 0700 before payload/metadata installation.
+
+Hardlinks must form a closed set within the source manifest and the selected target allowlist after exclusions. A link into an excluded or unowned path blocks before target writes; closure is rechecked after cold-state capture, immediately before apply and during rollback. Independent offline recovery also rejects a mount sharing the running root's filesystem device: bind aliases and same-device subvolumes have no verified snapshot adapter in this RC. These checks do not establish that the mounted system is powered off; that remains an operator/field prerequisite.
 
 Target startup defaults to the target's saved original service set. IMAGE_DESIRED_SERVICES=true explicitly selects the image's sealed desired-service contract, which is validated against target inventory; arbitrary missing service names block. On startup failure the same helper requiesces, restores the verified snapshot, resumes the original target state and verifies it. If any step is unsafe, active.json and all rollback files remain; no false success is emitted.
+
+## Shell operation without Jenkins
+
+The following commands are templates for a Leader-approved isolated qualification, not authorization to run a production migration. Install the runtime file list above in a new root-owned directory; retain V1, old.groovy, prior images and rollback journals. Use independently verified SSH keys/known_hosts (or existing controlled environment password injection); do not put passwords on command lines.
+
+On the source, after reviewing actual identities, service inventory, item/exclude files, metadata capabilities and relay storage:
+
+    export GREEN_MIG_KNOWN_HOSTS=/root/.ssh/green_known_hosts
+    bash green_migration_tool.sh backup-to-relay \
+      --relay-ip RELAY_HOST --relay-user root --relay-root /private/native/relay \
+      --backup-name reviewed-image --source-root / --source-service-cycle true \
+      --item-file reviewed-items.txt --exclude-file reviewed-exclude.txt \
+      --source-id ACTUAL_SOURCE_MACHINE_ID --image-arch MATCHING_ARCH \
+      --image-os-id MATCHING_OS --image-os-version MATCHING_OS_VERSION \
+      --image-product VERIFIED_PRODUCT --image-version VERIFIED_VERSION \
+      --image-store local --image-archive-root /private/native/archives \
+      --session-token UNIQUE_SOURCE_TOKEN
+
+Record the emitted backup ID and require both BACKUP_OK and SOURCE_RECOVERED. A failed command, partial original-state recovery or retained source lease is HOLD, even if archive files exist. Use IMAGE_STORE=webdav only for the already mounted reviewed WebDAV archive root; working images and transaction state stay on native storage.
+
+On an independently booted recovery host with the verified target root mounted at /mnt/target, set one identical argument array for planning, apply and exact-token recovery:
+
+    target=(--target-root /mnt/target --target-mode offline
+      --target-id ACTUAL_TARGET_MACHINE_ID --source-id VERIFIED_SOURCE_ID
+      --image-arch MATCHING_ARCH --image-os-id MATCHING_OS
+      --image-os-version MATCHING_OS_VERSION --image-product VERIFIED_PRODUCT
+      --image-version VERIFIED_VERSION --restore-mode replace-managed
+      --allowlist /private/reviewed-allowlist.txt
+      --state-dir /private/native/recovery-state --session-token UNIQUE_TARGET_TOKEN)
+    bash green_migration_tool.sh plan-image --image-dir /private/verified-image "${target[@]}"
+    bash green_migration_tool.sh restore-image --image-dir /private/verified-image "${target[@]}"
+
+Directory input can be replaced by --image-archive /private/image.tar with its SHA256 sidecar. The read-only file plan does not freeze services or create a target snapshot. The relay precheck additionally may unpack a verified archive into a newly reserved relay image directory and create temporary transport archives; it therefore needs native free space and write permission on relay. Failed/incomplete reserved images remain marked and are never silently reused; temporary files are cleaned only when ownership is known.
+
+For a narrow live /opt subtree, use TARGET_ROOT=/, TARGET_MODE=managed and --target-service-cycle true with a reviewed target profile/allowlist. Full root images must keep the offline mode above. Offline completion means TARGET_APPLIED with services deferred until boot, followed by independent listener/database/business checks.
 
 ## Jenkins deployment and parameters
 
@@ -110,7 +149,9 @@ The existing three Jenkins string credential IDs are green-mig-source-pass, gree
 
 Code rollback: stop scheduling new work; preserve the failed token/state and exact release. If a session is active, use its matching controller first. Repoint the Job to the privately backed-up prior INLINE definition and prior version directory only after all service/file sessions are reconciled. Never overwrite a changed old.groovy or delete old images.
 
-Data rollback: failure compensation is automatic when safe. Otherwise use green_v11_image.py recover with the exact original token, target facts, allowlist, mode and state-dir. It validates the saved sealed contract and verified snapshot even if the original image has disappeared. Preserve the journal until Leader reviews successful recovery. Unknown or stale PID/lease/command-lock ownership needs explicit read-only process reconciliation; a dead PID alone never proves no orphan copy remains.
+Data rollback: failure compensation is automatic when safe. Otherwise, after checking that no transfer or transaction still owns the target, run `bash green_migration_tool.sh recover-image --image-dir /private/verified-image "${target[@]}"` with the exact original contract. The image-dir is the original path and may be absent; recovery uses the retained sealed contract and verified snapshot. Do not unpack an archive or invent a new token to recover. Preserve the journal until Leader reviews successful recovery. Unknown or stale PID/lease/command-lock ownership needs explicit read-only process reconciliation; a dead PID alone never proves no orphan copy remains. SIGKILL cannot run compensation: its locks/journal deliberately remain and reentry blocks. No automatic stale-lock removal is provided.
+
+An SSH/Jenkins disconnect can lose the response while the target is still working or compensating. The adapter reports TARGET_OUTCOME=UNKNOWN and the recovery token, keeps failure status and issues no second target write. Inspect remote ownership, phase and service state before choosing any exact-token recovery. A returned wrapper success, completed file copy, or open port alone is not business acceptance.
 
 Required field gate after Leader review: one isolated representative same-architecture source and target; actual source/target/relay identities, current Jenkins INLINE mapping, exact deployed file hashes, actual writer/profile/exclusion/metadata capabilities, a complete real image and checksum, offline mount rollback, source original-state return, target boot/services/listeners and business acceptance. These remain NOT_VERIFIED/NOT_RUN. V1 remains OPEN.
 

@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 
 
@@ -230,7 +231,37 @@ class ServicesTest(unittest.TestCase):
         self.run_helper("source-resume", "missing", ok=False)
         self.assertEqual("missing", self.active())
 
+    def test_changed_inventory_is_rejected_before_any_resume_request(self):
+        self.run_helper("source-freeze", "inventory-drift", "--yes")
+        self.services(unexpected="Stopped")
+        before = self.requests()
+        result = self.run_helper("source-resume", "inventory-drift", ok=False)
+        self.assertIn("SERVICES_INVENTORY_CHANGED_NO_START", result.stdout)
+        self.assertEqual(before, self.requests())
+        self.assertEqual("inventory-drift", self.active())
+
+    def test_hung_supervisor_command_is_bounded_before_stop(self):
+        self.env["GREEN_V1_MONIT_TIMEOUT"] = "1"
+        self.write("bin/monit", '#!/usr/bin/env bash\n/usr/bin/sleep 20\nexit 1\n', executable=True)
+        started = time.monotonic()
+        result = self.run_helper("source-freeze", "hung-monit", "--yes", ok=False)
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertIn("monit summary unavailable", result.stderr)
+        self.assertEqual("", self.requests())
+        self.assertFalse((self.state / "active").exists())
+        self.assertFalse((self.state / ".command-lock").exists())
+        self.env["GREEN_V1_WAIT_STEP"] = "0"
+        result = self.run_helper("source-freeze", "invalid-wait", "--yes", ok=False)
+        self.assertIn("invalid lifecycle wait interval", result.stderr)
+        self.env["GREEN_V1_WAIT_STEP"] = "1"
+        self.env["GREEN_V1_MONIT_TIMEOUT"] = "301"
+        result = self.run_helper("source-freeze", "invalid-timeout", "--yes", ok=False)
+        self.assertIn("invalid supervisor command timeout", result.stderr)
+
     def test_token_reentry_cross_role_and_lock_fail_closed(self):
+        for invalid in (".", "..", ".hidden", "-leading"):
+            self.run_helper("source-freeze", invalid, "--yes", ok=False)
+        self.assertEqual("", self.requests())
         self.run_helper("source-freeze", "once", "--yes")
         self.run_helper("source-freeze", "once", "--yes", ok=False)
         self.run_helper("target-freeze", "other", "--yes", ok=False)

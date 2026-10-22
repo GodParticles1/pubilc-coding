@@ -8,10 +8,13 @@ import json
 import os
 import pathlib
 import shutil
+import signal
+import stat
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -19,6 +22,8 @@ HERE = pathlib.Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("green_image", HERE / "green_v11_image.py")
 gm = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gm)
+from fixture_driver import install_fixture
+install_fixture(gm)
 
 
 class ImageTransactionTests(unittest.TestCase):
@@ -224,6 +229,28 @@ class ImageTransactionTests(unittest.TestCase):
             with self.assertRaisesRegex(gm.Blocked, "independent mount"):
                 gm.target_profile(self.args("--target-mode", "offline"))
 
+    def test_offline_mount_cannot_alias_running_root_filesystem(self):
+        etc = self.target / "etc"
+        etc.mkdir()
+        (etc / "machine-id").write_text("target\n")
+        (etc / "os-release").write_text('ID=debian\nVERSION_ID="10"\n')
+        (self.target / ".green-v11-target.json").write_text(json.dumps(self.profile))
+        original_stat = pathlib.Path.stat
+        running_dev = original_stat(pathlib.Path("/")).st_dev
+        def same_device(path, *args, **kwargs):
+            result = original_stat(path, *args, **kwargs)
+            if path == self.target:
+                fields = list(result)
+                fields[2] = running_dev
+                return os.stat_result(fields)
+            return result
+        with mock.patch.object(gm, "linux_root_process", return_value=True), \
+             mock.patch.object(gm.platform, "machine", return_value="armv7l"), \
+             mock.patch.object(gm.os.path, "ismount", return_value=True), \
+             mock.patch.object(pathlib.Path, "stat", same_device):
+            with self.assertRaisesRegex(gm.Blocked, "shares running-root filesystem"):
+                gm.target_profile(self.args("--target-mode", "offline"))
+
     def test_snapshot_failure_restores_services_without_applying_data(self):
         real_copy = gm.copy_entries
         def copy_fail(src, dst, entries, preserve_existing=False):
@@ -347,7 +374,8 @@ class ImageTransactionTests(unittest.TestCase):
 
     def test_stale_pid_lock_never_auto_clears(self):
         state = self.base / "state"
-        (state / ".lock").mkdir(parents=True)
+        state.mkdir(mode=0o700)
+        (state / ".lock").mkdir(mode=0o700)
         (state / ".lock/owner.json").write_text('{"pid":999999}')
         with self.assertRaisesRegex(gm.Blocked, "lock exists"):
             self.apply()
@@ -355,7 +383,7 @@ class ImageTransactionTests(unittest.TestCase):
 
     def test_other_state_directory_cannot_bypass_target_active_token(self):
         global_state = self.target / ".green-v11-restore"
-        global_state.mkdir()
+        global_state.mkdir(mode=0o700)
         gm.write_json(global_state / "active.json", {"contract": {"token": "other"}})
         with self.assertRaisesRegex(gm.Blocked, "another state directory"):
             self.apply()
@@ -378,7 +406,8 @@ class ImageTransactionTests(unittest.TestCase):
     def test_archive_collision_lock_is_not_cleared(self):
         output = self.base / "image.tar"
         lock = self.base / ".image.tar.green-archive/.lock"
-        lock.mkdir(parents=True)
+        lock.parent.mkdir(mode=0o700)
+        lock.mkdir(mode=0o700)
         with self.assertRaisesRegex(gm.Blocked, "lock exists"):
             gm.archive_image(self.image, output)
         self.assertTrue(lock.exists())
@@ -454,6 +483,210 @@ class ImageTransactionTests(unittest.TestCase):
         dest = self.base / "unpack-hardlinks"
         gm.unpack(output, dest)
         self.assertTrue(os.path.samefile(dest / "files/opt/app/data", dest / "files/opt/app/alias"))
+
+    def test_target_hardlink_outside_allowlist_or_excluded_blocks_without_mutation(self):
+        original = self.target / "opt/app/data"
+        for alias in (self.target / "unmanaged/outside", self.target / "opt/app/alias.log"):
+            alias.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.link(original, alias)
+            except OSError as exc:
+                self.skipTest("host hardlink creation unavailable: " + str(exc))
+            try:
+                with self.subTest(alias=alias), mock.patch.object(gm, "service") as svc:
+                    with self.assertRaisesRegex(gm.Blocked, "hardlink.*boundary"):
+                        self.apply()
+                    svc.assert_not_called()
+                    self.assertEqual(original.read_text(), "old-data")
+                    self.assertTrue(os.path.samefile(original, alias))
+                    self.assertFalse((self.base / "state").exists())
+            finally:
+                alias.unlink()
+
+    def test_selected_image_hardlinks_cannot_cross_allowlist(self):
+        (self.image / "files/opt/app/sub/new").unlink()
+        os.link(self.image / "files/opt/app/data", self.image / "files/opt/app/sub/new")
+        (self.image / gm.META).unlink()
+        (self.image / gm.META_SHA).unlink()
+        self.seal()
+        self.allow.write_text("/opt/app/sub\n")
+        with self.assertRaisesRegex(gm.Blocked, "image hardlink.*boundary"):
+            self.apply()
+        self.assertEqual((self.target / "opt/app/sub").is_dir(), True)
+        self.assertFalse((self.base / "state").exists())
+
+    def test_merge_preserve_never_mutates_an_existing_inode_via_new_hardlink(self):
+        os.link(self.image / "files/opt/app/data", self.image / "files/opt/app/alias")
+        (self.image / gm.META).unlink()
+        (self.image / gm.META_SHA).unlink()
+        self.seal()
+        before = (self.target / "opt/app/data").stat()
+        with self.assertRaisesRegex(gm.Blocked, "partly create.*hardlink"):
+            self.apply(self.args("--restore-mode", "merge-preserve"))
+        after = (self.target / "opt/app/data").stat()
+        self.assertEqual((before.st_ino, before.st_mode, before.st_mtime_ns),
+                         (after.st_ino, after.st_mode, after.st_mtime_ns))
+        self.assertFalse((self.target / "opt/app/alias").exists())
+        self.assertFalse((self.base / "state").exists())
+
+    def test_late_hardlink_is_rechecked_before_destructive_apply(self):
+        alias = self.target / "outside-alias"
+        checks = []
+        def service(args, op, desired=None):
+            if op == "target-check":
+                checks.append(op)
+                if len(checks) == 2:
+                    os.link(self.target / "opt/app/data", alias)
+        with mock.patch.object(gm, "service", side_effect=service):
+            with self.assertRaisesRegex(gm.Blocked, "hardlink.*boundary"):
+                self.apply(self.args("--service-cycle", "--services-helper", "fake"))
+        self.assertEqual((self.target / "opt/app/data").read_text(), "old-data")
+        self.assertTrue(os.path.samefile(self.target / "opt/app/data", alias))
+        self.assertFalse((self.base / "state/active.json").exists())
+
+    def test_rollback_hardlink_boundary_retains_journal_until_reconciled(self):
+        real_reconcile = gm.reconcile
+        alias = self.target / "outside-alias"
+        def reconcile(source, root, old, desired, mode):
+            real_reconcile(source, root, old, desired, mode)
+            os.link(self.target / "opt/app/data", alias)
+            raise OSError("injected apply interruption")
+        with mock.patch.object(gm, "reconcile", side_effect=reconcile), contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaisesRegex(OSError, "injected apply"):
+                self.apply()
+        self.assertEqual(gm.read_json(self.base / "state/active.json")["phase"], "RECOVERY_REQUIRED")
+        self.assertEqual(alias.read_text(), "new-data")
+        # Reconcile only this test-created alias; no session/lock/pidfile deletion.
+        alias.unlink()
+        gm.apply_image(self.args(), recover=True)
+        self.assertEqual((self.target / "opt/app/data").read_text(), "old-data")
+
+    def test_dot_transaction_tokens_never_resolve_to_session_parent(self):
+        for token in (".", "..", "-option", ".hidden"):
+            with self.subTest(token=token), self.assertRaisesRegex(gm.Blocked, "invalid transaction token"):
+                self.apply(self.args("--token=" + token))
+            with self.subTest(recover=token), self.assertRaisesRegex(gm.Blocked, "invalid recovery token"):
+                gm.apply_image(self.args("--token=" + token), recover=True)
+        self.assertFalse((self.base / "state").exists())
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permissions require Linux filesystem semantics")
+    def test_public_existing_journal_is_held_without_permission_repair(self):
+        state = self.base / "state"
+        state.mkdir(mode=0o755)
+        marker = state / "operator-evidence"
+        marker.write_text("preserve me")
+        with self.assertRaisesRegex(gm.Blocked, "preserve existing journal"):
+            self.apply()
+        self.assertEqual(stat.S_IMODE(state.stat().st_mode), 0o755)
+        self.assertEqual(marker.read_text(), "preserve me")
+        self.assertEqual((self.target / "opt/app/data").read_text(), "old-data")
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permissions require Linux filesystem semantics")
+    def test_private_copy_window_and_transaction_storage_ignore_public_umask(self):
+        parent = self.image / "files/opt/app"
+        parent.chmod(0o700)
+        (parent / "data").chmod(0o644)
+        (self.image / gm.META).unlink()
+        (self.image / gm.META_SHA).unlink()
+        self.seal()
+        copy = gm.shutil.copyfileobj
+        observed = []
+        def observe(source, output, *args):
+            mode = stat.S_IMODE(os.fstat(output.fileno()).st_mode)
+            self.assertEqual(mode, 0o600, "copy must begin with a private regular file")
+            stage = self.base / "state/sessions/run-1/stage"
+            snapshot = self.base / "state/sessions/run-1/snapshot"
+            for path in (self.base / "state", self.base / "state/sessions",
+                         self.base / "state/sessions/run-1", stage, snapshot):
+                if path.exists():
+                    self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700)
+            # Inspect this copy's actual parent, including the target's old
+            # public parent that must be tightened before its first new file.
+            actual = pathlib.Path(os.readlink("/proc/self/fd/" + str(output.fileno())))
+            for base in (stage, snapshot, self.target):
+                if base in actual.parents and (base / "opt/app") in actual.parents:
+                    self.assertEqual(stat.S_IMODE((base / "opt/app").stat().st_mode), 0o700)
+            observed.append(mode)
+            return copy(source, output, *args)
+        previous = os.umask(0o022)
+        try:
+            with mock.patch.object(gm.shutil, "copyfileobj", side_effect=observe):
+                self.apply()
+        finally:
+            os.umask(previous)
+        self.assertTrue(observed)
+        self.assertEqual(stat.S_IMODE((self.target / "opt/app").stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE((self.target / "opt/app/data").stat().st_mode), 0o644)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX O_NOFOLLOW requires Linux filesystem semantics")
+    def test_metadata_leaf_replaced_after_validation_cannot_follow_symlink(self):
+        leaf = self.target / "opt/app/data"
+        sentinel = self.base / "sentinel"
+        sentinel.write_text("unchanged")
+        sentinel.chmod(0o640)
+        metadata = gm.inventory(self.target, ["opt/app/data"])
+        real_open = gm.os.open
+        swapped = []
+        def open_after_swap(path, flags, *args, **kwargs):
+            if pathlib.Path(path) == leaf and not swapped:
+                leaf.unlink()
+                leaf.symlink_to(sentinel)
+                swapped.append(True)
+            return real_open(path, flags, *args, **kwargs)
+        with mock.patch.object(gm.os, "open", side_effect=open_after_swap):
+            with self.assertRaises(OSError):
+                gm.restore_metadata(self.target, metadata)
+        self.assertTrue(swapped)
+        self.assertEqual(sentinel.read_text(), "unchanged")
+        self.assertEqual(stat.S_IMODE(sentinel.stat().st_mode), 0o640)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX signal lifecycle requires Linux processes")
+    def test_real_sigterm_rolls_back_and_sigkill_retains_exact_recovery_ownership(self):
+        driver = self.base / "signal_driver.py"
+        gate = self.base / "write-complete"
+        # Only the disposable test process is paused; production has no fault hook.
+        driver.write_text("import pathlib, sys, time\n"
+            "sys.path.insert(0, " + repr(str(HERE / "tests")) + ")\n"
+            "from fixture_driver import load_image\n"
+            "gm=load_image()\nreal=gm.reconcile\nfirst=True\n"
+            "def pause_after_apply(*args, **kwargs):\n"
+            " global first\n real(*args, **kwargs)\n"
+            " if first:\n  first=False\n  pathlib.Path(" + repr(str(gate)) + ").touch()\n"
+            "  while True: time.sleep(.02)\n"
+            "gm.reconcile=pause_after_apply\nsys.exit(gm.main(sys.argv[1:]))\n")
+        args = ["apply", str(self.image), "--target-root", str(self.target),
+                "--state-dir", str(self.base / "state"), "--token", "signal-term",
+                "--source-id", "source", "--target-id", "target", "--arch", "armv7l",
+                "--os-id", "debian", "--os-version", "10", "--product", "AU", "--version", "C30",
+                "--target-mode", "fixture", "--allowlist", str(self.allow), "--restore-mode", "replace-managed"]
+        for signum, token in ((signal.SIGTERM, "signal-term"), (signal.SIGKILL, "signal-kill")):
+            args[args.index("--token") + 1] = token
+            gate.unlink(missing_ok=True)
+            process = subprocess.Popen([sys.executable, str(driver), *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                until = time.monotonic() + 15
+                while not gate.exists() and process.poll() is None and time.monotonic() < until:
+                    time.sleep(.02)
+                self.assertTrue(gate.exists(), "child did not reach deterministic apply boundary")
+                process.send_signal(signum)
+                stdout, stderr = process.communicate(timeout=15)
+                if signum == signal.SIGTERM:
+                    self.assertEqual(process.returncode, 2, stderr)
+                    self.assertIn("TARGET_ROLLED_BACK", stdout)
+                    self.assertEqual((self.target / "opt/app/data").read_text(), "old-data")
+                    self.assertFalse((self.base / "state/active.json").exists())
+                else:
+                    self.assertEqual(process.returncode, -signal.SIGKILL)
+                    self.assertEqual(gm.read_json(self.base / "state/active.json")["phase"], "APPLYING")
+                    self.assertTrue((self.base / "state/.lock/owner.json").is_file())
+                    self.assertTrue((self.target / ".green-v11-restore/.lock/owner.json").is_file())
+                    with self.assertRaisesRegex(gm.Blocked, "lock exists"):
+                        self.apply(self.args("--token", token))
+                    self.assertEqual((self.target / "opt/app/data").read_text(), "new-data")
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate(timeout=5)
 
     def test_real_symlink_escape_is_not_followed(self):
         link = self.image / "files/opt/app/link"
