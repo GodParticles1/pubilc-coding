@@ -1,0 +1,197 @@
+{
+  "candidate": "RC2",
+  "scope": "OFFLINE_EQUIVALENT_LOGIC_ONLY",
+  "tested_source_commit": "39df25173ba6011268b376a855fbd7f39646b495",
+  "source_sha256": {
+    "Jenkinsfile_green_migration_tool.groovy": "8f339f7d8e562a9ba9bf66b41df16fadb10e32d80c92fa521941838cc0950dc9",
+    "exclude.txt": "8b026e08d1afb4d3688c4eebac487d79a00075ee879385b94eb40e0ae8f544b3",
+    "green_migration_tool.sh": "995b6abdeab08b9851a82cb367f26a3991f30821d8479e6689ee331a15eaa328",
+    "green_v11_image.py": "c4ff9f0eee1021e7a019d8bf9e26c708b40c0d3bbf359ea622cc5b243dcbec2f",
+    "green_v11_jenkins.sh": "b82ec20ba9635818bd68aeb213e2ba3ae7d25671b7b3012d0ed5a88bd2189f44",
+    "green_v1_services.sh": "8c92f7b7aff7c751cb015522cf47804a4a6b10b36172670bfd11934d13fb13b2",
+    "green_v1_target_start.sh": "2245a945415e19aa0a5f1a786adb59fdd2eaaeb5ed4867ef158a18c6d62da821",
+    "items_rootpkg.txt": "1a8479b7aa81e74783d7ebcea5de0d3fcb2c2dcf263208545926286de2c252b1",
+    "tests/fixture_driver.py": "5f01b3b9fcf6a8780fdf2a7ff86873e3d0af39b13a30a3738bca776f56132cbc",
+    "tests/fixture_shell.sh": "ac1dfb3a002889535d638fc1e82b96ab6dc25915c4683db0c9cb31378109a81b",
+    "tests/package_release.py": "e4bdb2f4b95eb16e8d0a807a3a1d27938a05276510faa6e8da1877fe85691ddf",
+    "tests/run_matrix.py": "681cb718082f919e7ee21df420090eecc635e90ec9713a03a4d653bc32999cda",
+    "tests/run_suite.py": "aea0c2c46a5e32c685e66902326339d6e3e0e0047310d8f2fb7ab497eeaca8c3",
+    "tests/test_images.py": "6ab64ee3c980fe5df121c569bc3658b5642e62ce7e57764942b39875566dba5d",
+    "tests/test_integrated.py": "8c947362176d3c8adf9ce3b14f32d314f28edc903672d733a70271c4dc2891c9",
+    "tests/test_pipeline.py": "5cba320481c6730c5355c4872890cc1a84f13d4c85ffbb47a099b3ef9b1824cf",
+    "tests/test_services.py": "85eeee9c7e2639e7106e0617020e79c597976b094882dd194c8e581e3593ff7c",
+    "tests/test_transport.py": "7cc75a8e1d8ef8d8d76bf70a7a7328a5a66e9dede1fa1919289ba4acfaf5138f",
+    "verify_offline.sh": "2bd9f464aedef13e48dd443043e242ec7bb1ddaae78ed36c6036bf94cb3e1e79"
+  },
+  "source_changed_during_run": [],
+  "linux": {
+    "status": "PASS",
+    "workflow": {
+      "run_id": 39808753397,
+      "job_id": 119928957486,
+      "artifact_id": 12438912243,
+      "artifact_sha256": "2b8b6afd15cf3d3b6d7127ee09d0655515c3a4e61872be39cad314972343ab86",
+      "html_url": "https://github.com/GodParticles1/pubilc-coding/actions/runs/39808753397",
+      "head_sha": "39df25173ba6011268b376a855fbd7f39646b495",
+      "previous_run_id": 39804530983,
+      "infra_failed_run_id": 39807403158
+    },
+    "result": {
+      "scope": "OFFLINE_EQUIVALENT_LOGIC_ONLY",
+      "platform": "Linux-7.0.0-1017-azure-x86_64-with-glibc2.39",
+      "tests_run": 174,
+      "passed": 174,
+      "failures": 0,
+      "errors": 0,
+      "skipped": [],
+      "source_changed_during_run": [],
+      "field_armv7": "NOT_RUN",
+      "real_databases": "NOT_RUN",
+      "live_jenkins": "NOT_VERIFIED",
+      "business_acceptance": "PENDING",
+      "modules": [
+        {
+          "name": "test_images.py",
+          "exit_code": 0,
+          "tests_run": 82
+        },
+        {
+          "name": "test_integrated.py",
+          "exit_code": 0,
+          "tests_run": 3
+        },
+        {
+          "name": "test_pipeline.py",
+          "exit_code": 0,
+          "tests_run": 35
+        },
+        {
+          "name": "test_services.py",
+          "exit_code": 0,
+          "tests_run": 30
+        },
+        {
+          "name": "test_transport.py",
+          "exit_code": 0,
+          "tests_run": 24
+        }
+      ],
+      "matrix": "PASS_WITH_EXPLICIT_SKIPS"
+    },
+    "tool_versions": {
+      "python": "3.12.3",
+      "shellcheck": "0.9.0",
+      "rsync": "3.2.7 protocol 31"
+    },
+    "bash_syntax": "PASS",
+    "python_compile": "PASS",
+    "shellcheck": "PASS",
+    "groovy_syntax_compile": "PASS"
+  },
+  "windows": {
+    "status": "PASS_WITH_EXPLICIT_SKIPS",
+    "result": {
+      "scope": "OFFLINE_EQUIVALENT_LOGIC_ONLY",
+      "platform": "Windows-11-10.0.26200-SP0",
+      "tests_run": 174,
+      "passed": 165,
+      "failures": 0,
+      "errors": 0,
+      "skipped": [
+        {
+          "test": "test_metadata_leaf_replaced_after_validation_cannot_follow_symlink (test_images.ImageTransactionTests.test_metadata_leaf_replaced_after_validation_cannot_follow_symlink)",
+          "reason": "POSIX O_NOFOLLOW requires Linux filesystem semantics"
+        },
+        {
+          "test": "test_offline_top_level_symlink_is_replaced_without_dereference (test_images.ImageTransactionTests.test_offline_top_level_symlink_is_replaced_without_dereference)",
+          "reason": "Windows lacks symlink creation privilege (WinError 1314); same case passed on Linux."
+        },
+        {
+          "test": "test_private_copy_window_and_transaction_storage_ignore_public_umask (test_images.ImageTransactionTests.test_private_copy_window_and_transaction_storage_ignore_public_umask)",
+          "reason": "POSIX permissions require Linux filesystem semantics"
+        },
+        {
+          "test": "test_public_existing_journal_is_held_without_permission_repair (test_images.ImageTransactionTests.test_public_existing_journal_is_held_without_permission_repair)",
+          "reason": "POSIX permissions require Linux filesystem semantics"
+        },
+        {
+          "test": "test_real_sigterm_rolls_back_and_sigkill_retains_exact_recovery_ownership (test_images.ImageTransactionTests.test_real_sigterm_rolls_back_and_sigkill_retains_exact_recovery_ownership)",
+          "reason": "POSIX signal lifecycle requires Linux processes"
+        },
+        {
+          "test": "test_real_symlink_escape_is_not_followed (test_images.ImageTransactionTests.test_real_symlink_escape_is_not_followed)",
+          "reason": "Windows lacks symlink creation privilege (WinError 1314); same case passed on Linux."
+        },
+        {
+          "test": "test_restore_metadata_declared_kind_must_match_lstat (test_images.ImageTransactionTests.test_restore_metadata_declared_kind_must_match_lstat)",
+          "reason": "Windows lacks symlink creation privilege (WinError 1314); same case passed on Linux."
+        },
+        {
+          "test": "test_unpack_metadata_file_kind_cannot_disguise_actual_symlink (test_images.ImageTransactionTests.test_unpack_metadata_file_kind_cannot_disguise_actual_symlink)",
+          "reason": "Windows lacks symlink creation privilege (WinError 1314); same case passed on Linux."
+        },
+        {
+          "test": "test_native_rsync_protocol_to_fake_ssh_endpoint (test_transport.TransportTests.test_native_rsync_protocol_to_fake_ssh_endpoint)",
+          "reason": "native rsync unavailable; fake protocol is not native coverage"
+        }
+      ],
+      "source_changed_during_run": [],
+      "field_armv7": "NOT_RUN",
+      "real_databases": "NOT_RUN",
+      "live_jenkins": "NOT_VERIFIED",
+      "business_acceptance": "PENDING",
+      "modules": [
+        {
+          "name": "test_images.py",
+          "exit_code": 0,
+          "tests_run": 82
+        },
+        {
+          "name": "test_integrated.py",
+          "exit_code": 0,
+          "tests_run": 3
+        },
+        {
+          "name": "test_pipeline.py",
+          "exit_code": 0,
+          "tests_run": 35
+        },
+        {
+          "name": "test_services.py",
+          "exit_code": 0,
+          "tests_run": 30
+        },
+        {
+          "name": "test_transport.py",
+          "exit_code": 0,
+          "tests_run": 24
+        }
+      ],
+      "matrix": "PASS_WITH_EXPLICIT_SKIPS"
+    },
+    "python_version": "3.12.4",
+    "bash_syntax": "PASS",
+    "python_compile": "PASS",
+    "shellcheck": "NOT_RUN_TOOL_UNAVAILABLE",
+    "groovy_syntax_compile": "NOT_RUN_COMPILER_UNAVAILABLE"
+  },
+  "packaging_validation": {
+    "status": "PASS",
+    "method": "two output paths produced identical ZIP bytes; per-entry SHA256 and CRC verified",
+    "runtime_files": 18,
+    "synthetic_drivers_installed": false
+  },
+  "evidence_limits": {
+    "real_ssh_network": "NOT_VERIFIED",
+    "real_webdav_server": "NOT_VERIFIED",
+    "live_jenkins_definition_and_deployment": "NOT_VERIFIED",
+    "jenkins_declarative_runtime": "NOT_RUN",
+    "field_armv7": "NOT_RUN",
+    "real_databases": "NOT_RUN",
+    "actual_offline_root_ownership": "NOT_VERIFIED",
+    "current_215_recovery": "NOT_VERIFIED",
+    "real_image_metadata": "NOT_VERIFIED",
+    "business_acceptance": "PENDING",
+    "leader_acceptance": "PENDING"
+  }
+}

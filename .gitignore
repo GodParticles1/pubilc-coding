@@ -1,0 +1,7 @@
+# Private operator inputs and recovered originals are never public artifacts.
+/.local/
+/projects/green-migration/*.zip
+/projects/green-migration/green213_finalize_if_healthy.sh
+/projects/green-migration/green215_finalize_if_healthy.sh
+__pycache__/
+*.pyc
