@@ -1,0 +1,89 @@
+name: Shared Quality Gate
+
+on:
+  workflow_call:
+    inputs:
+      project-path:
+        description: Repository-relative project folder
+        required: true
+        type: string
+      profile:
+        description: One of python, shell-python or go
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate project scope
+        shell: bash
+        env:
+          PROJECT_INPUT: ${{ inputs.project-path }}
+          PROFILE_INPUT: ${{ inputs.profile }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, pathlib, re
+          project=os.environ["PROJECT_INPUT"]
+          profile=os.environ["PROFILE_INPUT"]
+          if profile not in ("python", "shell-python", "go"):
+              raise SystemExit("UNSUPPORTED_PROFILE")
+          segments=project.split("/")
+          if not segments or any(x in ("", ".", "..") or not re.fullmatch(r"[A-Za-z0-9_.-]+",x) for x in segments):
+              raise SystemExit("INVALID_PROJECT_PATH")
+          base=pathlib.Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          path=(base/project).resolve()
+          if not path.is_dir() or os.path.commonpath((str(base),str(path)))!=str(base):
+              raise SystemExit("PROJECT_OUT_OF_SCOPE")
+          with open(os.environ["GITHUB_ENV"],"a",encoding="utf-8") as out:
+              out.write("CI_PROJECT="+str(path)+"\nCI_PROFILE="+profile+"\n")
+          print("SCOPE=VALIDATED")
+          PY
+      - name: Run selected non-production tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$CI_PROJECT"
+          case "$CI_PROFILE" in
+            python)
+              test -d tests || { echo 'PYTHON_TESTS_MISSING'; exit 2; }
+              python3 -m unittest discover -s tests -v
+              ;;
+            shell-python)
+              test -d tests || { echo 'SHELL_PYTHON_TESTS_MISSING'; exit 2; }
+              mapfile -d '' -t scripts < <(find . -type f -name '*.sh' -print0)
+              ((${#scripts[@]} > 0)) || { echo 'SHELL_SCRIPTS_MISSING'; exit 2; }
+              for file in "${scripts[@]}"; do bash -n "$file"; done
+              if command -v shellcheck >/dev/null 2>&1; then
+                shellcheck --severity=warning "${scripts[@]}"
+                echo 'SHELLCHECK=PASS'
+              else
+                echo 'SHELLCHECK=NOT_RUN_TOOL_UNAVAILABLE'
+                exit 2
+              fi
+              python3 -m unittest discover -s tests -v
+              ;;
+            go)
+              test -f go.mod || { echo 'GO_MOD_MISSING'; exit 2; }
+              go test ./...
+              go vet ./...
+              ;;
+            *) echo 'INVALID_PROFILE'; exit 2 ;;
+          esac
+          {
+            echo '### Shared Quality Gate'
+            echo "- Source: $GITHUB_REPOSITORY@$GITHUB_SHA"
+            echo "- Profile: $CI_PROFILE"
+            echo "- Project: ${CI_PROJECT#$GITHUB_WORKSPACE/}"
+            echo '- Scope: fixture/code only; not Jenkins, ARMv7, production or business acceptance'
+          } >> "$GITHUB_STEP_SUMMARY"
