@@ -1,0 +1,13 @@
+name: Shared CI Contract Smoke
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  public-synthetic:
+    uses: ./.github/workflows/reusable-quality.yml
+    with:
+      project-path: ci/samples/python-shell
+      profile: shell-python
