@@ -2,6 +2,10 @@
 
 **Repo:** `GodParticles1/pubilc-coding` — public development navigation. Current project is **not a public production-ready release**.
 
+## 项目管理与当前迭代
+
+- [PROJECT.md](PROJECT.md) 是 Green Migration 的 Leader 管理、源码保全和迭代入口。即时任务和验收仍以相应 Issue/PR 实时状态为准；未合并的 RC2 不等于 main 已发布。
+
 ## Start here
 
 - [v1-reference/](v1-reference/) contains **sanitized text representations** of the six-file user-provided legacy baseline (only four human-readable files are published).
